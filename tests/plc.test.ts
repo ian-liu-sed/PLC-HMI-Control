@@ -75,6 +75,19 @@ describe("PlcLineSimulator", () => {
     expect(plc.getSnapshot().scanCount).toBe(before);
   });
 
+  it("starts the mission clock only after START and keeps counting downtime", () => {
+    const plc = new PlcLineSimulator(14);
+    plc.tick(5_000);
+    expect(plc.getSnapshot().missionElapsedMs).toBe(0);
+
+    armAndStart(plc);
+    plc.tick(1_000);
+    expect(plc.getSnapshot().missionElapsedMs).toBe(1_000);
+    plc.stop();
+    plc.tick(1_000);
+    expect(plc.getSnapshot().missionElapsedMs).toBe(2_000);
+  });
+
   it("cannot energize a tower output without electrical power", () => {
     const plc = new PlcLineSimulator(15);
     armAndStart(plc);

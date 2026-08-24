@@ -7,26 +7,85 @@ import type {
   SequenceStep,
   ViewId,
 } from "./simulator/types";
+import {
+  completeClientRecovery,
+  failureCount,
+  HOLD_THRESHOLD,
+  holdRemainingMs,
+  loadCampaign,
+  recordOutcome,
+  selectDifficulty,
+  unlockBadges,
+  type CampaignState,
+} from "./game/campaign";
+import { evaluateBadges, type BadgeId } from "./game/badges";
+import { MISSIONS, missionSimConfig } from "./game/missions";
+import type { CampaignScreen, DifficultyTier, MissionDef } from "./game/types";
+import { NEGOTIATION_PASS, NEGOTIATION_ROUNDS } from "./game/story";
+import {
+  renderBrief,
+  renderClient,
+  renderHold,
+  renderHub,
+  renderNegotiate,
+  renderResult,
+} from "./ui/campaign";
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
 if (!appRoot) throw new Error("#app is required");
 const app: HTMLDivElement = appRoot;
 
-const plc = new PlcLineSimulator();
+let plc = new PlcLineSimulator();
 let snapshot = plc.getSnapshot();
 let locale: Locale = loadLocale();
 let view: ViewId = "hmi";
+let screen: CampaignScreen = "hub";
+let missionIndex = 0;
+let campaign: CampaignState = loadCampaign();
+let bestScores: Record<string, number> = loadBest();
+let holdActions = new Set<number>();
+let negotiationStep = 0;
+let negotiationTrust = 45;
+let negotiationChoice: number | null = null;
+let clientRecoverySucceeded = false;
+let recentBadgeIds: BadgeId[] = [];
+let holdClockTimer = 0;
+let playRaf = 0;
+let lastPlayTs = 0;
+let lastAlarmCode: number | null = null;
 let toast: { text: string; kind: "error" | "success"; until: number } | null = null;
 
-const STEP_LABELS: Record<SequenceStep, { zh: string; ja: string }> = {
-  0: { zh: "待机", ja: "待機" },
-  10: { zh: "进料", ja: "供給" },
-  20: { zh: "定位", ja: "位置決め" },
-  30: { zh: "主工艺", ja: "主工程" },
-  40: { zh: "检测", ja: "検査" },
-  50: { zh: "分拣", ja: "選別" },
-  60: { zh: "计数", ja: "カウント" },
-  90: { zh: "批次完成", ja: "バッチ完了" },
+const EQUIPMENT_PHOTOS: Record<string, string> = {
+  "tablet-press": "./equipment/tablet-press.jpg",
+  "capsule-filler": "./equipment/capsule-filler.jpg",
+  "capsule-polisher": "./equipment/capsule-polisher.jpg",
+  "metal-detector": "./equipment/metal-detector.jpg",
+  "pill-counter": "./equipment/pill-counter.jpg",
+  capping: "./equipment/cap-seal.jpg",
+  "induction-sealer": "./equipment/cap-seal.jpg",
+  "blister-packer": "./equipment/blister-packer.jpg",
+};
+
+const STATION_STEPS: Record<string, number[]> = {
+  feed: [10, 20],
+  process: [20, 30],
+  inspect: [40],
+  sort: [50, 60],
+};
+
+function currentMission(): MissionDef {
+  return MISSIONS[missionIndex];
+}
+
+const STEP_LABELS: Record<SequenceStep, { zh: string; ja: string; en: string }> = {
+  0: { zh: "待机", ja: "待機", en: "Idle" },
+  10: { zh: "进料", ja: "供給", en: "Infeed" },
+  20: { zh: "定位", ja: "位置決め", en: "Position" },
+  30: { zh: "主工艺", ja: "主工程", en: "Process" },
+  40: { zh: "检测", ja: "検査", en: "Inspect" },
+  50: { zh: "分拣", ja: "選別", en: "Sort" },
+  60: { zh: "计数", ja: "カウント", en: "Count" },
+  90: { zh: "批次完成", ja: "バッチ完了", en: "Batch complete" },
 };
 
 const ST_CODE = `// FX-style IEC structured text / 参考实现
@@ -53,16 +112,40 @@ END_CASE;`;
 
 function loadLocale(): Locale {
   try {
-    const stored = localStorage.getItem("fx-line-locale");
-    if (stored === "zh" || stored === "ja") return stored;
+    const stored = localStorage.getItem("sed-control-locale");
+    if (stored === "zh" || stored === "ja" || stored === "en") return stored;
   } catch {
     // Storage may be disabled; the simulator still works.
   }
-  return navigator.language.toLowerCase().startsWith("ja") ? "ja" : "zh";
+  const nav = navigator.language.toLowerCase();
+  if (nav.startsWith("ja")) return "ja";
+  if (nav.startsWith("zh")) return "zh";
+  return "en";
 }
 
-function t(zh: string, ja: string): string {
-  return locale === "zh" ? zh : ja;
+function loadBest(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem("sed-control-best") ?? "{}") as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+function saveBest(missionId: string, score: number): void {
+  const prev = bestScores[missionId] ?? 0;
+  if (score <= prev) return;
+  bestScores[missionId] = score;
+  try {
+    localStorage.setItem("sed-control-best", JSON.stringify(bestScores));
+  } catch {
+    /* ignore */
+  }
+}
+
+function t(zh: string, ja: string, en = zh): string {
+  if (locale === "ja") return ja;
+  if (locale === "en") return en;
+  return zh;
 }
 
 function esc(value: string | number): string {
@@ -110,9 +193,161 @@ function stepLabel(step = snapshot.step): string {
   return localized(STEP_LABELS[step], locale);
 }
 
+function startPlayLoop(): void {
+  if (playRaf) return;
+  lastPlayTs = performance.now();
+  lastAlarmCode = snapshot.activeAlarm?.code ?? null;
+  playRaf = requestAnimationFrame(playLoop);
+}
+
+function stopPlayLoop(): void {
+  if (playRaf) cancelAnimationFrame(playRaf);
+  playRaf = 0;
+}
+
+function playLoop(ts: number): void {
+  if (screen !== "play") {
+    playRaf = 0;
+    return;
+  }
+  const dt = Math.min(250, Math.max(0, ts - lastPlayTs));
+  lastPlayTs = ts;
+  snapshot = plc.tick(dt);
+  if (snapshot.result) {
+    playRaf = 0;
+    finishMission();
+    return;
+  }
+  patchLive();
+  playRaf = requestAnimationFrame(playLoop);
+}
+
+function setLive(id: string, text: string): void {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
+function patchLive(): void {
+  if (screen !== "play") return;
+  const m = snapshot.metrics;
+  setLive("live-link-ms", snapshot.connected ? `${snapshot.commLatencyMs.toFixed(1)} ms` : "—");
+  setLive("live-link-label", snapshot.connected ? t("通信在线", "通信オンライン", "Link up") : t("通信离线", "通信オフライン", "Link down"));
+  setLive("live-state", stateLabel());
+  setLive("live-cpu", snapshot.powered ? "CPU RUN" : "CPU STOP");
+  setLive("live-scan", snapshot.powered ? `${snapshot.scanTimeMs.toFixed(2)} ms` : "—");
+  setLive("live-clock", clock(snapshot.nowMs));
+  setLive("live-oee", pct(m.oeePct));
+  setLive("live-oee-num", String(Math.round(m.oeePct)));
+  setLive("live-total", `${m.total.toLocaleString()}`);
+  setLive("live-good", String(m.good));
+  setLive("live-reject", String(m.rejected));
+  setLive("live-weight", `${m.currentWeightMg.toFixed(1)} mg`);
+  setLive("live-pass", snapshot.inputs.qualityPass ? "PASS" : "REJECT");
+  setLive("live-step", String(snapshot.step).padStart(2, "0"));
+  setLive("live-step-label", stepLabel());
+  setLive("live-hud-good", `${m.good}/${snapshot.recipe.batchTarget}`);
+  setLive("live-hud-reject", String(m.rejected));
+  setLive("live-hud-oee", pct(m.oeePct));
+  setLive("live-hud-step", `D0 ${String(snapshot.step).padStart(2, "0")}`);
+  setLive("live-log-count", `${snapshot.events.length} LOGS`);
+
+  document.getElementById("live-link-pill")?.classList.toggle("is-on", snapshot.connected);
+  const statePill = document.getElementById("live-state-pill");
+  if (statePill) {
+    statePill.className = `status-pill state-${stateTone()}`;
+  }
+  const passEl = document.getElementById("live-pass");
+  if (passEl) {
+    passEl.className = snapshot.inputs.qualityPass ? "text-ok" : "text-alarm";
+  }
+  const bar = document.getElementById("live-progress");
+  if (bar) bar.style.width = `${m.batchProgressPct}%`;
+  const ring = document.getElementById("live-oee-ring");
+  if (ring) ring.style.setProperty("--progress", `${m.oeePct * 3.6}deg`);
+  const scanBar = document.getElementById("live-scan-bar");
+  if (scanBar) scanBar.style.width = `${snapshot.powered ? Math.min(100, snapshot.scanTimeMs * 18) : 0}%`;
+
+  document.querySelectorAll<HTMLElement>("[data-station]").forEach((el) => {
+    const kind = el.dataset.station ?? "";
+    const active = (STATION_STEPS[kind] ?? []).includes(snapshot.step);
+    el.classList.toggle("active", active);
+    const status = el.querySelector("[data-station-status]");
+    if (status) status.textContent = active ? t("动作中", "動作中", "Run") : t("待机", "待機", "Idle");
+  });
+  document.querySelectorAll<HTMLElement>("[data-flow]").forEach((el) => {
+    const kind = el.dataset.flow ?? "";
+    el.classList.toggle("active", (STATION_STEPS[kind] ?? []).includes(snapshot.step));
+  });
+  document.querySelectorAll<HTMLElement>("[data-cond]").forEach((el) => {
+    const ok =
+      el.dataset.cond === "X0"
+        ? snapshot.inputs.eStopHealthy
+        : el.dataset.cond === "X1"
+          ? snapshot.inputs.safetyDoorClosed
+          : el.dataset.cond === "X2"
+            ? snapshot.inputs.driveHealthy
+            : snapshot.safetyReset && snapshot.inputs.eStopHealthy && snapshot.inputs.safetyDoorClosed && snapshot.inputs.driveHealthy;
+    el.classList.toggle("pass", ok);
+    el.classList.toggle("fail", !ok);
+    const flag = el.querySelector("em");
+    if (flag) flag.textContent = ok ? "OK" : "NG";
+  });
+  document.querySelectorAll<HTMLElement>("[data-bit]").forEach((el) => {
+    const [group, tag] = (el.dataset.bit ?? "").split(":");
+    const table = snapshot.devices[group as "X" | "Y" | "M" | "SM"];
+    const on = Boolean(table?.[tag]);
+    el.classList.toggle("on", on);
+    const flag = el.querySelector("b");
+    if (flag) flag.textContent = on ? "1" : "0";
+  });
+  document.querySelectorAll<HTMLElement>("[data-word]").forEach((el) => {
+    const [group, tag] = (el.dataset.word ?? "").split(":");
+    const table = snapshot.devices[group as "D" | "SD"];
+    const value = table?.[tag];
+    const flag = el.querySelector("b");
+    if (flag && value != null) flag.textContent = String(value);
+    el.classList.toggle("attn", snapshot.attentionDevices.includes(tag));
+  });
+  document.querySelectorAll<HTMLElement>("[data-device]").forEach((el) => {
+    el.classList.toggle("attention", snapshot.attentionDevices.includes(el.dataset.device ?? ""));
+  });
+
+  const events = document.getElementById("live-events");
+  if (events) {
+    const html = snapshot.events
+      .slice(0, 7)
+      .map(
+        (event) =>
+          `<div class="event-row ${event.level}"><i></i><time>${eventTime(event.atMs)}</time><p>${esc(localized(event.text, locale))}</p></div>`,
+      )
+      .join("");
+    if (events.innerHTML !== html) events.innerHTML = html;
+  }
+
+  const alarmCode = snapshot.activeAlarm?.code ?? null;
+  if (alarmCode !== lastAlarmCode) {
+    lastAlarmCode = alarmCode;
+    const slot = document.getElementById("alarm-slot");
+    if (slot) slot.innerHTML = renderAlarmBanner();
+  }
+
+  const coach = document.getElementById("live-coach");
+  if (coach) {
+    coach.hidden = snapshot.running || snapshot.completed;
+  }
+}
+
 function render(): void {
-  document.documentElement.lang = locale === "zh" ? "zh-CN" : "ja";
-  document.title = t("FX 产线控制实验室", "FX ライン制御ラボ");
+  document.documentElement.lang = locale === "zh" ? "zh-CN" : locale === "ja" ? "ja" : "en";
+  document.title = t("SED 控制飞行员", "SED コントロールパイロット", "SED Control Pilot");
+
+  if (screen !== "play") {
+    stopPlayLoop();
+    stopHoldClock();
+    app.innerHTML = `${renderCampaign()}${renderToast()}`;
+    if (screen === "hold") startHoldClock();
+    return;
+  }
 
   app.innerHTML = `
     <div class="app-frame">
@@ -127,31 +362,147 @@ function render(): void {
     </div>
     ${renderToast()}
   `;
+  lastAlarmCode = snapshot.activeAlarm?.code ?? null;
+}
+
+function renderCampaign(): string {
+  const mission = currentMission();
+  switch (screen) {
+    case "hub":
+      return renderHub(locale, campaign, bestScores);
+    case "brief":
+      return renderBrief(locale, mission, campaign);
+    case "result":
+      return snapshot.result
+        ? renderResult(
+            locale,
+            mission,
+            snapshot.result,
+            failureCount(campaign, mission.id),
+            recentBadgeIds,
+            campaign,
+          )
+        : renderHub(locale, campaign, bestScores);
+    case "hold":
+      return renderHold(locale, mission, holdRemainingMs(campaign, mission.id), holdActions);
+    case "negotiate":
+      return renderNegotiate(
+        locale,
+        mission,
+        negotiationStep,
+        negotiationTrust,
+        negotiationChoice,
+        campaign.cooperations,
+      );
+    case "client":
+      return renderClient(
+        locale,
+        mission,
+        clientRecoverySucceeded,
+        negotiationTrust,
+        campaign.difficulty,
+      );
+    default:
+      return renderHub(locale, campaign, bestScores);
+  }
+}
+
+function startHoldClock(): void {
+  stopHoldClock();
+  if (holdRemainingMs(campaign, currentMission().id) <= 0) return;
+  holdClockTimer = window.setInterval(() => {
+    const remaining = holdRemainingMs(campaign, currentMission().id);
+    const el = document.getElementById("hold-countdown");
+    if (el) {
+      const total = Math.max(0, Math.ceil(remaining / 1000));
+      el.textContent = `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+    }
+    if (remaining <= 0) {
+      stopHoldClock();
+      render();
+    }
+  }, 1000);
+}
+
+function stopHoldClock(): void {
+  if (holdClockTimer) window.clearInterval(holdClockTimer);
+  holdClockTimer = 0;
+}
+
+function openBrief(index: number): void {
+  missionIndex = index;
+  if (failureCount(campaign, currentMission().id) >= HOLD_THRESHOLD) {
+    holdActions = new Set();
+    screen = "hold";
+  } else {
+    screen = "brief";
+  }
+  render();
+}
+
+function startMission(): void {
+  if (failureCount(campaign, currentMission().id) >= HOLD_THRESHOLD) {
+    holdActions = new Set();
+    screen = "hold";
+    render();
+    return;
+  }
+  recentBadgeIds = [];
+  plc = new PlcLineSimulator(missionSimConfig(currentMission(), campaign.difficulty));
+  snapshot = plc.getSnapshot();
+  view = "hmi";
+  screen = "play";
+  render();
+  startPlayLoop();
+}
+
+function finishMission(): void {
+  if (screen !== "play") return;
+  stopPlayLoop();
+  const result = snapshot.result;
+  if (!result) return;
+  const mission = currentMission();
+  campaign = recordOutcome(campaign, mission.id, result.passed);
+  if (result.passed) {
+    saveBest(mission.id, result.score);
+    recentBadgeIds = evaluateBadges(
+      mission.id,
+      result,
+      campaign.difficulty,
+      Object.keys(campaign.badges),
+    );
+    campaign = unlockBadges(campaign, recentBadgeIds);
+  }
+  screen = failureCount(campaign, mission.id) >= HOLD_THRESHOLD && !result.passed ? "hold" : "result";
+  if (screen === "hold") holdActions = new Set();
+  render();
 }
 
 function renderTopbar(): string {
   return `
     <header class="topbar">
       <div class="brand-block">
-        <div class="brand-mark" aria-hidden="true"><span>FX</span><i></i></div>
+        <div class="brand-mark" aria-hidden="true"><span>${snapshot.cpu.family}</span><i></i></div>
         <div>
-          <p class="eyebrow">PLC × HMI / CONTROL LAB</p>
-          <h1>${t("电动生产线控制", "電動生産ライン制御")}</h1>
+          <p class="eyebrow">${snapshot.cpu.family} · ${esc(snapshot.cpu.model)} · ${esc(currentMission().id)}</p>
+          <h1>${esc(localized(currentMission().title, locale))}</h1>
         </div>
       </div>
       <div class="top-status" aria-label="${t("系统状态", "システム状態")}">
-        <div class="status-pill ${snapshot.connected ? "is-on" : ""}">
+        <div class="status-pill ${snapshot.connected ? "is-on" : ""}" id="live-link-pill">
           <span class="status-dot"></span>
-          <span>${snapshot.connected ? t("通信在线", "通信オンライン") : t("通信离线", "通信オフライン")}</span>
-          <b>${snapshot.connected ? `${snapshot.commLatencyMs.toFixed(1)} ms` : "—"}</b>
+          <span id="live-link-label">${snapshot.connected ? t("通信在线", "通信オンライン", "Link up") : t("通信离线", "通信オフライン", "Link down")}</span>
+          <b id="live-link-ms">${snapshot.connected ? `${snapshot.commLatencyMs.toFixed(1)} ms` : "—"}</b>
         </div>
-        <div class="status-pill state-${stateTone()}">
-          <span class="status-dot"></span><span>${stateLabel()}</span>
-          <b>${snapshot.powered ? "CPU RUN" : "CPU STOP"}</b>
+        <div class="status-pill state-${stateTone()}" id="live-state-pill">
+          <span class="status-dot"></span><span id="live-state">${stateLabel()}</span>
+          <b id="live-cpu">${snapshot.powered ? "CPU RUN" : "CPU STOP"}</b>
         </div>
+        <button type="button" class="abort-link" data-action="abort-mission">${t("中止任务", "ミッション中止", "Abort")}</button>
         <div class="locale-switch" role="group" aria-label="Language">
           <button type="button" data-locale="zh" class="${locale === "zh" ? "active" : ""}">中文</button>
           <button type="button" data-locale="ja" class="${locale === "ja" ? "active" : ""}">日本語</button>
+          <button type="button" data-locale="en" class="${locale === "en" ? "active" : ""}">EN</button>
         </div>
       </div>
     </header>
@@ -178,9 +529,9 @@ function renderRail(): string {
         )
         .join("")}
       <div class="rail-system">
-        <span>${t("扫描", "スキャン")}</span>
-        <b>${snapshot.powered ? `${snapshot.scanTimeMs.toFixed(2)} ms` : "—"}</b>
-        <i class="mini-bar"><em style="width:${snapshot.powered ? Math.min(100, snapshot.scanTimeMs * 18) : 0}%"></em></i>
+        <span>${t("扫描", "スキャン", "Scan")}</span>
+        <b id="live-scan">${snapshot.powered ? `${snapshot.scanTimeMs.toFixed(2)} ms` : "—"}</b>
+        <i class="mini-bar"><em id="live-scan-bar" style="width:${snapshot.powered ? Math.min(100, snapshot.scanTimeMs * 18) : 0}%"></em></i>
       </div>
     </nav>
   `;
@@ -209,42 +560,58 @@ function renderPageHead(kicker: string, titleZh: string, titleJa: string, descZh
       </div>
       <div class="page-meta">
         <span>${t("批次", "バッチ")} <b>${esc(snapshot.batchId)}</b></span>
-        <span>${t("周期", "サイクル")} <b>${clock(snapshot.nowMs)}</b></span>
+        <span>${t("周期", "サイクル", "Cycle")} <b id="live-clock">${clock(snapshot.nowMs)}</b></span>
       </div>
     </section>
   `;
 }
 
 function renderHmi(): string {
+  const mission = currentMission();
   return `
     <div class="screen-enter">
+      <section class="game-hud" aria-label="HUD">
+        <div><span>${t("良品", "良品", "Good")}</span><b id="live-hud-good">${snapshot.metrics.good}/${snapshot.recipe.batchTarget}</b></div>
+        <div><span>${t("剔除", "排出", "Reject")}</span><b id="live-hud-reject">${snapshot.metrics.rejected}</b></div>
+        <div><span>OEE</span><b id="live-hud-oee">${pct(snapshot.metrics.oeePct)}</b></div>
+        <div><span>STEP</span><b id="live-hud-step">D0 ${String(snapshot.step).padStart(2, "0")}</b></div>
+        <div><span>CPU</span><b>${snapshot.cpu.family} ${esc(snapshot.cpu.model)}</b></div>
+      </section>
+      <p class="live-coach" id="live-coach" ${snapshot.running || snapshot.completed ? "hidden" : ""}>
+        ${t(
+          "操作链：主电源 → 通信链路里连接 → 安全复位 → AUTO → START。运行中只更新数值，按钮保持可点。",
+          "操作：主電源 → NETで接続 → 安全リセット → AUTO → START。運転中は数値のみ更新し、ボタンは再構築しません。",
+          "Chain: Power → Connect on NET → Safety reset → AUTO → START. While running, only values patch — buttons stay clickable.",
+        )}
+      </p>
       ${renderPageHead(
-        "HMI / OVERVIEW",
+        "HMI / CONTROL ROOM",
         "运行总览",
         "運転概要",
-        "以电气 I/O 驱动进料、主工艺、检测与分拣的训练产线。",
-        "電気I/Oで供給・主工程・検査・選別を駆動するトレーニングラインです。",
+        "SED 设备由 FX 或 Q PLC 驱动。先建立安全链，再写配方、再启动。",
+        "SED設備をFXまたはQ PLCで制御します。安全チェーン確立後にレシピを書き、起動します。",
       )}
-      ${renderAlarmBanner()}
+      <div id="alarm-slot">${renderAlarmBanner()}</div>
       <section class="hmi-grid">
         <div class="process-panel panel">
           <div class="panel-head">
-            <div><span class="section-no">A</span><h3>${t("工艺流程", "工程フロー")}</h3></div>
-            <div class="step-display"><small>STEP / D0</small><strong>${String(snapshot.step).padStart(2, "0")}</strong><span>${stepLabel()}</span></div>
+            <div><span class="section-no">A</span><h3>${t("工艺流程", "工程フロー", "Process")}</h3></div>
+            <div class="step-display"><small>STEP / D0</small><strong id="live-step">${String(snapshot.step).padStart(2, "0")}</strong><span id="live-step-label">${stepLabel()}</span></div>
           </div>
-          <div class="process-track" role="img" aria-label="${t("生产线状态图", "生産ライン状態図")}">
-            ${renderStation("feed", "01", t("电动进料", "電動供給"), [10, 20].includes(snapshot.step))}
-            ${renderFlow([20].includes(snapshot.step))}
-            ${renderStation("process", "02", t("主工艺轴", "主工程軸"), [20, 30].includes(snapshot.step))}
-            ${renderFlow([30, 40].includes(snapshot.step))}
-            ${renderStation("inspect", "03", t("在线检测", "インライン検査"), [40].includes(snapshot.step))}
-            ${renderFlow([50].includes(snapshot.step))}
-            ${renderStation("sort", "04", t("电动分拣", "電動選別"), [50, 60].includes(snapshot.step))}
+          <div class="process-track" role="img" aria-label="${t("生产线状态图", "生産ライン状態図", "Line status")}">
+            ${mission.stations
+              .map((station, index) => {
+                const kind = station.id;
+                const active = (STATION_STEPS[kind] ?? []).includes(snapshot.step);
+                const photo = EQUIPMENT_PHOTOS[mission.equipment[index] ?? ""] ?? mission.photo;
+                return `${index ? renderFlow(kind, active) : ""}${renderStation(kind, String(index + 1).padStart(2, "0"), localized(station.label, locale), active, photo)}`;
+              })
+              .join("")}
           </div>
           <div class="process-footer">
-            <div><span>${t("当前重量", "現在重量")}</span><strong>${snapshot.metrics.currentWeightMg.toFixed(1)} <small>mg</small></strong></div>
-            <div><span>${t("设定速度", "設定速度")}</span><strong>${snapshot.recipe.speedPpm} <small>pcs/min</small></strong></div>
-            <div><span>${t("当前判定", "現在判定")}</span><strong class="${snapshot.inputs.qualityPass ? "text-ok" : "text-alarm"}">${snapshot.inputs.qualityPass ? "PASS" : "REJECT"}</strong></div>
+            <div><span>${t("当前重量", "現在重量", "Weight")}</span><strong id="live-weight">${snapshot.metrics.currentWeightMg.toFixed(1)} mg</strong></div>
+            <div><span>${t("设定速度", "設定速度", "Speed")}</span><strong>${snapshot.recipe.speedPpm} pcs/min</strong></div>
+            <div><span>${t("当前判定", "現在判定", "Judge")}</span><strong id="live-pass" class="${snapshot.inputs.qualityPass ? "text-ok" : "text-alarm"}">${snapshot.inputs.qualityPass ? "PASS" : "REJECT"}</strong></div>
           </div>
         </div>
         ${renderKpiStack()}
@@ -269,12 +636,12 @@ function renderAlarmBanner(): string {
   `;
 }
 
-function renderStation(kind: string, number: string, label: string, active: boolean): string {
+function renderStation(kind: string, number: string, label: string, active: boolean, photo?: string): string {
   return `
-    <div class="station ${active ? "active" : ""}">
+    <div class="station ${active ? "active" : ""}" data-station="${kind}">
       <div class="station-top"><span>${number}</span><i></i></div>
-      <div class="machine-art ${kind}">${machineSvg(kind)}</div>
-      <div class="station-name"><b>${label}</b><span>${active ? t("动作中", "動作中") : t("待机", "待機")}</span></div>
+      <div class="machine-art ${kind}">${photo ? `<img src="${esc(photo)}" alt="">` : machineSvg(kind)}</div>
+      <div class="station-name"><b>${label}</b><span data-station-status>${active ? t("动作中", "動作中", "Run") : t("待机", "待機", "Idle")}</span></div>
     </div>
   `;
 }
@@ -293,8 +660,8 @@ function machineSvg(kind: string): string {
   return `<svg ${common}><rect class="body" x="30" y="34" width="100" height="63" rx="5"/><path class="metal" d="M42 34l15-20h46l15 20"/><path class="accent" d="M80 45v39M58 64h44"/><path class="line" d="M42 97v13M118 97v13M20 110h120"/><circle class="light" cx="115" cy="49" r="5"/></svg>`;
 }
 
-function renderFlow(active: boolean): string {
-  return `<div class="flow-link ${active ? "active" : ""}"><i></i><span>›</span></div>`;
+function renderFlow(kind: string, active: boolean): string {
+  return `<div class="flow-link ${active ? "active" : ""}" data-flow="${kind}"><i></i><span>›</span></div>`;
 }
 
 function renderKpiStack(): string {
@@ -302,13 +669,13 @@ function renderKpiStack(): string {
   return `
     <aside class="kpi-stack">
       <div class="kpi-card primary">
-        <span>OEE</span><strong>${pct(m.oeePct)}</strong>
-        <div class="ring" style="--progress:${m.oeePct * 3.6}deg"><i>${Math.round(m.oeePct)}</i></div>
+        <span>OEE</span><strong id="live-oee">${pct(m.oeePct)}</strong>
+        <div class="ring" id="live-oee-ring" style="--progress:${m.oeePct * 3.6}deg"><i id="live-oee-num">${Math.round(m.oeePct)}</i></div>
       </div>
-      <div class="kpi-card"><span>${t("总产量", "総生産数")}</span><strong>${m.total.toLocaleString()}</strong><small>/ ${snapshot.recipe.batchTarget.toLocaleString()} pcs</small><em><i style="width:${m.batchProgressPct}%"></i></em></div>
+      <div class="kpi-card"><span>${t("总产量", "総生産数", "Total")}</span><strong id="live-total">${m.total.toLocaleString()}</strong><small>/ ${snapshot.recipe.batchTarget.toLocaleString()} pcs</small><em><i id="live-progress" style="width:${m.batchProgressPct}%"></i></em></div>
       <div class="kpi-split">
-        <div><span>${t("良品", "良品")}</span><b class="text-ok">${m.good}</b></div>
-        <div><span>${t("剔除", "排出")}</span><b class="text-alarm">${m.rejected}</b></div>
+        <div><span>${t("良品", "良品", "Good")}</span><b class="text-ok" id="live-good">${m.good}</b></div>
+        <div><span>${t("剔除", "排出", "Reject")}</span><b class="text-alarm" id="live-reject">${m.rejected}</b></div>
       </div>
     </aside>
   `;
@@ -343,7 +710,7 @@ function renderControlPanel(): string {
 }
 
 function condition(tag: string, label: string, pass: boolean): string {
-  return `<div class="condition ${pass ? "pass" : "fail"}"><i></i><span><b>${tag}</b>${label}</span><em>${pass ? "OK" : "NG"}</em></div>`;
+  return `<div class="condition ${pass ? "pass" : "fail"}" data-cond="${tag}"><i></i><span><b>${tag}</b>${label}</span><em>${pass ? "OK" : "NG"}</em></div>`;
 }
 
 function renderRecipePanel(): string {
@@ -352,20 +719,45 @@ function renderRecipePanel(): string {
     <section class="panel recipe-panel">
       <div class="panel-head compact"><div><span class="section-no">C</span><h3>${t("配方参数", "レシピ設定")}</h3></div><span class="lock-state">${snapshot.running ? t("运行锁定", "運転中ロック") : t("可编辑", "編集可")}</span></div>
       <form id="recipe-form" class="recipe-form">
-        ${recipeField("speedPpm", "D100", t("生产速度", "生産速度"), r.speedPpm, "pcs/min", 10, 90)}
-        ${recipeField("targetWeightMg", "D101", t("目标重量", "目標重量"), r.targetWeightMg, "mg", 100, 1200)}
-        ${recipeField("toleranceMg", "D102", t("允许偏差", "許容偏差"), r.toleranceMg, "± mg", 2, 80)}
-        ${recipeField("rejectPulseMs", "D103", t("剔除脉冲", "排出パルス"), r.rejectPulseMs, "ms", 40, 500)}
-        ${recipeField("batchTarget", "D104", t("批次目标", "バッチ目標"), r.batchTarget, "pcs", 20, 9999)}
+        ${currentMission().recipeFields.map((field) => {
+          const limits: Record<string, [number, number, string]> = {
+            speedPpm: [10, 90, r.speedPpm + ""],
+            targetWeightMg: [100, 1200, String(r.targetWeightMg)],
+            toleranceMg: [2, 80, String(r.toleranceMg)],
+            rejectPulseMs: [40, 500, String(r.rejectPulseMs)],
+            batchTarget: [20, 9999, String(r.batchTarget)],
+          };
+          const [min, max] = limits[field.key];
+          const attention = snapshot.attentionDevices.includes(field.device);
+          return recipeField(
+            field.key,
+            field.device,
+            localized(field.label, locale),
+            r[field.key],
+            field.unit,
+            min,
+            max,
+            attention,
+          );
+        }).join("")}
         <button type="submit" class="save-recipe" ${snapshot.running ? "disabled" : ""}><span>${t("写入配方", "レシピ書込み")}</span><small>WRITE + VERIFY</small></button>
       </form>
     </section>
   `;
 }
 
-function recipeField(name: string, tag: string, label: string, value: number, unit: string, min: number, max: number): string {
+function recipeField(
+  name: string,
+  tag: string,
+  label: string,
+  value: number,
+  unit: string,
+  min: number,
+  max: number,
+  attention = false,
+): string {
   return `
-    <label class="recipe-field">
+    <label class="recipe-field ${attention ? "attention" : ""}" data-device="${tag}">
       <span><b>${tag}</b>${label}</span>
       <span class="input-unit"><input name="${name}" type="number" value="${value}" min="${min}" max="${max}" step="1" ${snapshot.running ? "disabled" : ""}/><em>${unit}</em></span>
     </label>
@@ -375,8 +767,8 @@ function recipeField(name: string, tag: string, label: string, value: number, un
 function renderEventPanel(): string {
   return `
     <section class="panel event-panel">
-      <div class="panel-head compact"><div><span class="section-no">D</span><h3>${t("事件记录", "イベント履歴")}</h3></div><span>${snapshot.events.length} LOGS</span></div>
-      <div class="event-list">
+      <div class="panel-head compact"><div><span class="section-no">D</span><h3>${t("事件记录", "イベント履歴", "Events")}</h3></div><span id="live-log-count">${snapshot.events.length} LOGS</span></div>
+      <div class="event-list" id="live-events">
         ${snapshot.events
           .slice(0, 7)
           .map(
@@ -390,8 +782,13 @@ function renderEventPanel(): string {
           <button type="button" data-fault="door">${t("安全门", "安全扉")}</button>
           <button type="button" data-fault="overload">${t("过载", "過負荷")}</button>
           <button type="button" data-fault="quality">${t("质量漂移", "品質ドリフト")}</button>
-          <button type="button" data-fault="link">${t("网络中断", "通信断")}</button>
-          <button type="button" data-action="clear-faults" class="clear">${t("清除条件", "条件解除")}</button>
+          <button type="button" data-fault="link">${t("网络中断", "通信断", "Link drop")}</button>
+          ${
+            snapshot.cpu.family === "Q"
+              ? `<button type="button" data-fault="remote">${t("远程站", "遠隔局", "Remote station")}</button>`
+              : ""
+          }
+          <button type="button" data-action="clear-faults" class="clear">${t("清除条件", "条件解除", "Clear faults")}</button>
         </div>
       </div>
     </section>
@@ -417,7 +814,7 @@ function renderPlc(): string {
         ${renderDeviceMonitor()}
         <section class="panel code-panel">
           <div class="panel-head compact"><div><span class="section-no">F</span><h3>${t("结构化文本示例", "構造化テキスト例")}</h3></div><span>IEC ST / FX STYLE</span></div>
-          <div class="code-file"><span>plc/FX5_LINE_CONTROL.st</span><b>READ ONLY</b></div>
+          <div class="code-file"><span>${snapshot.cpu.family === "Q" ? "plc/Q_LINE_CONTROL.st" : "plc/FX5_LINE_CONTROL.st"}</span><b>READ ONLY</b></div>
           <pre><code>${esc(ST_CODE)}</code></pre>
           <p class="code-note">${t("完整示例包含上电初始化、安全互锁、步进超时、HMI 心跳和报警锁存。", "完全な例には初期化、安全インターロック、ステップタイムアウト、HMIハートビート、アラームラッチを含みます。")}</p>
         </section>
@@ -436,7 +833,7 @@ function renderCpuModule(): string {
   ] as const;
   return `
     <section class="cpu-module panel">
-      <div class="cpu-brand"><span>FX</span><small>CPU / 24VDC I/O</small></div>
+      <div class="cpu-brand family-${snapshot.cpu.family.toLowerCase()}"><span>${snapshot.cpu.family}</span><small>${esc(snapshot.cpu.model)} / ${snapshot.cpu.engineeringTool}</small></div>
       <div class="cpu-body">
         <div class="cpu-lights">${lights.map(([name, on, tone]) => `<div><i class="${on ? `on ${tone}` : ""}"></i><span>${name}</span></div>`).join("")}</div>
         <div class="cpu-screen"><span>SCAN TIME</span><strong>${snapshot.powered ? snapshot.scanTimeMs.toFixed(2) : "0.00"}</strong><small>ms</small></div>
@@ -502,8 +899,18 @@ function renderDeviceMonitor(): string {
   return `
     <section class="panel device-panel">
       <div class="panel-head compact"><div><span class="section-no">I/O</span><h3>${t("软元件监视", "デバイスモニタ")}</h3></div><span>LIVE IMAGE</span></div>
-      ${groups.map(([prefix, label, devices]) => `<div class="device-group"><div class="device-title"><b>${prefix}</b><span>${label}</span></div><div class="bit-grid">${Object.entries(devices).map(([tag, value]) => `<div class="bit-cell ${value ? "on" : ""}"><i></i><span>${tag}</span><b>${value ? "1" : "0"}</b></div>`).join("")}</div></div>`).join("")}
-      <div class="device-group words"><div class="device-title"><b>D</b><span>${t("数据寄存器", "データレジスタ")}</span></div><div class="word-grid">${Object.entries(snapshot.devices.D).map(([tag, value]) => `<div><span>${tag}</span><b>${value}</b></div>`).join("")}</div></div>
+      ${groups.map(([prefix, label, devices]) => `<div class="device-group"><div class="device-title"><b>${prefix}</b><span>${label}</span></div><div class="bit-grid">${Object.entries(devices).map(([tag, value]) => `<div class="bit-cell ${value ? "on" : ""}" data-bit="${prefix}:${tag}"><i></i><span>${tag}</span><b>${value ? "1" : "0"}</b></div>`).join("")}</div></div>`).join("")}
+      ${
+        snapshot.cpu.family === "Q"
+          ? `<div class="device-group"><div class="device-title"><b>SM</b><span>${t("系统继电器", "システムリレー", "System relays")}</span></div><div class="bit-grid">${Object.entries(snapshot.devices.SM).map(([tag, value]) => `<div class="bit-cell ${value ? "on" : ""}" data-bit="SM:${tag}"><i></i><span>${tag}</span><b>${value ? "1" : "0"}</b></div>`).join("")}</div></div>`
+          : ""
+      }
+      <div class="device-group words"><div class="device-title"><b>D</b><span>${t("数据寄存器", "データレジスタ", "Data registers")}</span></div><div class="word-grid">${Object.entries(snapshot.devices.D).map(([tag, value]) => `<div class="${snapshot.attentionDevices.includes(tag) ? "attn" : ""}" data-word="D:${tag}"><span>${tag}</span><b>${value}</b></div>`).join("")}</div></div>
+      ${
+        snapshot.cpu.family === "Q"
+          ? `<div class="device-group words"><div class="device-title"><b>SD</b><span>${t("系统寄存器", "システムレジスタ", "System registers")}</span></div><div class="word-grid">${Object.entries(snapshot.devices.SD).map(([tag, value]) => `<div data-word="SD:${tag}"><span>${tag}</span><b>${value}</b></div>`).join("")}</div></div>`
+          : ""
+      }
     </section>
   `;
 }
@@ -540,9 +947,14 @@ function renderTopology(): string {
         ${networkCable("CAT5e STP", snapshot.connected)}
         ${topologyNode("switch", t("工业交换机", "産業用スイッチ"), "100BASE-TX", "VLAN 10", snapshot.connected)}
         ${networkCable(snapshot.protocol === "SLMP_3E" ? "3E / TCP" : "MODBUS / TCP", snapshot.connected)}
-        ${topologyNode("plc", "FX PLC", t("逻辑与数据", "ロジック・データ"), snapshot.ipAddress, snapshot.powered)}
-        <div class="io-branch"><span>${t("硬接线 24 VDC", "ハード配線 24 VDC")}</span><i></i></div>
-        ${topologyNode("machine", t("电动机构", "電動機構"), "DI / DO / PULSE", t("安全 + 工艺", "安全＋工程"), snapshot.safetyReset)}
+        ${topologyNode("plc", `${snapshot.cpu.family} ${snapshot.cpu.model}`, t("逻辑与数据", "ロジック・データ", "Logic and data"), snapshot.ipAddress, snapshot.powered)}
+        ${
+          snapshot.cpu.family === "Q"
+            ? `${networkCable("CC-Link", snapshot.remotes.every((remote) => remote.healthy))}
+        ${snapshot.remotes.map((remote) => topologyNode("machine", `ST${remote.id}`, localized(remote.name, locale), remote.healthy ? "ONLINE" : "DROP", remote.healthy)).join("")}`
+            : `<div class="io-branch"><span>${t("硬接线 24 VDC", "ハード配線 24 VDC", "Hardwired 24 VDC")}</span><i></i></div>
+        ${topologyNode("machine", t("SED 机构", "SED機構", "SED machine"), "DI / DO / PULSE", t("安全 + 工艺", "安全＋工程", "Safety + process"), snapshot.safetyReset)}`
+        }
       </div>
       <div class="topology-note"><i>!</i><p><b>${t("安全边界", "安全境界")}</b>${t("急停、安全门和驱动许可必须由经过验证的硬件安全回路实现；HMI 只显示状态并发送普通控制请求。", "非常停止、安全扉、ドライブ許可は検証済みハードウェア安全回路で実装します。HMIは状態表示と通常操作要求のみを行います。")}</p></div>
     </section>
@@ -714,7 +1126,7 @@ function renderFooter(): string {
   return `
     <footer class="app-footer">
       <div><span class="footer-mark">SIM</span><p><b>${t("训练仿真，不是真实机器控制器。", "トレーニング用シミュレーションであり、実機コントローラではありません。")}</b><small>${t("真实投产必须完成风险评估、电气图审查、安全验证和现场验收。", "実稼働にはリスク評価、電気図面レビュー、安全検証、現地受入が必要です。")}</small></p></div>
-      <span>FX LINE CONTROL LAB · v1.0</span>
+      <span>SED CONTROL PILOT · FX / Q · v2.0</span>
     </footer>
   `;
 }
@@ -729,6 +1141,10 @@ function handleResult(result: ActionResult): void {
     toast = { text: localized(result.reason, locale), kind: "error", until: Date.now() + 3600 };
   }
   snapshot = plc.tick(0);
+  if (screen === "play" && snapshot.result) {
+    finishMission();
+    return;
+  }
   render();
 }
 
@@ -738,10 +1154,47 @@ app.addEventListener("click", (event) => {
   if (localeButton) {
     locale = localeButton.dataset.locale as Locale;
     try {
-      localStorage.setItem("fx-line-locale", locale);
+      localStorage.setItem("sed-control-locale", locale);
     } catch {
       // Storage is optional.
     }
+    render();
+    return;
+  }
+
+  const openMission = target.closest<HTMLButtonElement>("[data-open-mission]");
+  if (openMission) {
+    openBrief(Number(openMission.dataset.openMission));
+    return;
+  }
+
+  const diffButton = target.closest<HTMLButtonElement>("[data-difficulty]");
+  if (diffButton) {
+    campaign = selectDifficulty(campaign, Number(diffButton.dataset.difficulty) as DifficultyTier);
+    render();
+    return;
+  }
+
+  const holdButton = target.closest<HTMLButtonElement>("[data-hold-action]");
+  if (holdButton) {
+    holdActions.add(Number(holdButton.dataset.holdAction));
+    render();
+    return;
+  }
+
+  const negButton = target.closest<HTMLButtonElement>("[data-negotiation-choice]");
+  if (negButton && negotiationChoice == null) {
+    const index = Number(negButton.dataset.negotiationChoice);
+    const choice = NEGOTIATION_ROUNDS[negotiationStep].choices[index];
+    negotiationChoice = index;
+    negotiationTrust = Math.min(100, Math.max(0, negotiationTrust + choice.trust));
+    render();
+    return;
+  }
+
+  const navButton = target.closest<HTMLButtonElement>("[data-nav]");
+  if (navButton?.dataset.nav === "hub") {
+    screen = "hub";
     render();
     return;
   }
@@ -775,6 +1228,51 @@ app.addEventListener("click", (event) => {
     "release-estop": () => plc.releaseEmergencyStop(),
     ack: () => plc.acknowledgeAlarm(),
     "clear-faults": () => plc.clearInjectedFaults(),
+    "abort-mission": () => plc.abortMission(),
+    "run-mission": () => {
+      startMission();
+      return { ok: true };
+    },
+    "retry-mission": () => {
+      startMission();
+      return { ok: true };
+    },
+    "call-client": () => {
+      if (holdRemainingMs(campaign, currentMission().id) > 0) return { ok: false };
+      negotiationStep = 0;
+      negotiationTrust = 45;
+      negotiationChoice = null;
+      screen = "negotiate";
+      render();
+      return { ok: true };
+    },
+    "neg-next": () => {
+      if (negotiationStep < NEGOTIATION_ROUNDS.length - 1) {
+        negotiationStep += 1;
+        negotiationChoice = null;
+        render();
+        return { ok: true };
+      }
+      clientRecoverySucceeded = negotiationTrust >= NEGOTIATION_PASS;
+      if (clientRecoverySucceeded) {
+        campaign = completeClientRecovery(campaign, currentMission().id);
+      }
+      screen = "client";
+      render();
+      return { ok: true };
+    },
+    "retry-neg": () => {
+      negotiationStep = 0;
+      negotiationTrust = 45;
+      negotiationChoice = null;
+      screen = "negotiate";
+      render();
+      return { ok: true };
+    },
+    "next-mission": () => {
+      openBrief((missionIndex + 1) % MISSIONS.length);
+      return { ok: true };
+    },
   };
   if (action && actions[action]) handleResult(actions[action]());
 });
@@ -804,11 +1302,5 @@ app.addEventListener("submit", (event) => {
     );
   }
 });
-
-window.setInterval(() => {
-  snapshot = plc.tick(500);
-  if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement) return;
-  render();
-}, 500);
 
 render();

@@ -1,14 +1,31 @@
-export type Locale = "zh" | "ja";
+export type Locale = "zh" | "ja" | "en";
 export type PlcMode = "manual" | "auto";
 export type Protocol = "SLMP_3E" | "MODBUS_TCP";
 export type ViewId = "hmi" | "plc" | "network" | "guide";
-export type FaultKind = "door" | "overload" | "quality" | "link";
-
+export type FaultKind = "door" | "overload" | "quality" | "link" | "remote";
+export type CpuFamily = "FX" | "Q";
 export type SequenceStep = 0 | 10 | 20 | 30 | 40 | 50 | 60 | 90;
 
-export interface BilingualText {
+export interface I18nText {
   zh: string;
   ja: string;
+  en: string;
+}
+
+/** @deprecated use I18nText */
+export type BilingualText = I18nText;
+
+export interface CpuProfile {
+  family: CpuFamily;
+  model: string;
+  seriesLabel: string;
+  addressing: "octal" | "hex";
+  defaultIp: string;
+  defaultPort: number;
+  defaultProtocol: Protocol;
+  scanBaseMs: number;
+  watchdogMs: number;
+  engineeringTool: string;
 }
 
 export interface Recipe {
@@ -28,6 +45,7 @@ export interface Inputs {
   processSensor: boolean;
   inspectSensor: boolean;
   qualityPass: boolean;
+  linkHealthy: boolean;
 }
 
 export interface Outputs {
@@ -54,14 +72,14 @@ export interface EventRecord {
   id: number;
   atMs: number;
   level: "info" | "warning" | "alarm" | "success";
-  text: BilingualText;
+  text: I18nText;
 }
 
 export interface AlarmRecord {
   code: number;
   raisedAtMs: number;
   active: boolean;
-  text: BilingualText;
+  text: I18nText;
 }
 
 export interface Metrics {
@@ -81,6 +99,28 @@ export interface DeviceSnapshot {
   Y: Record<string, boolean>;
   M: Record<string, boolean>;
   D: Record<string, number>;
+  SM: Record<string, boolean>;
+  SD: Record<string, number>;
+}
+
+export interface RemoteStationState {
+  id: number;
+  equipmentId: string;
+  name: I18nText;
+  healthy: boolean;
+}
+
+export interface MissionScore {
+  aborted: boolean;
+  completed: boolean;
+  passed: boolean;
+  qualityPct: number;
+  oeePct: number;
+  total: number;
+  good: number;
+  rejected: number;
+  incidentsHandled: number;
+  score: number;
 }
 
 export interface PlcSnapshot {
@@ -111,9 +151,43 @@ export interface PlcSnapshot {
   commErrors: number;
   hmiWatchdogMs: number;
   batchId: string;
+  cpu: CpuProfile;
+  missionId: string;
+  remotes: RemoteStationState[];
+  incidentsHandled: number;
+  attentionDevices: string[];
+  result: MissionScore | null;
 }
 
 export interface ActionResult {
   ok: boolean;
-  reason?: BilingualText;
+  reason?: I18nText;
+}
+
+export interface MissionIncidentConfig {
+  id: string;
+  atMs: number;
+  kind: FaultKind;
+  message: I18nText;
+}
+
+export interface RemoteStationConfig {
+  id: number;
+  equipmentId: string;
+  name: I18nText;
+}
+
+export interface SimConfig {
+  seed?: number;
+  family?: CpuFamily;
+  cpuModel?: string;
+  missionId?: string;
+  recipe?: Partial<Recipe>;
+  protocol?: Protocol;
+  ipAddress?: string;
+  port?: number;
+  incidents?: MissionIncidentConfig[];
+  remotes?: RemoteStationConfig[];
+  passQualityPct?: number;
+  passOeePct?: number;
 }

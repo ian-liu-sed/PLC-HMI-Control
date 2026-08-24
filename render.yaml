@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: fx-line-control-lab
+    name: sed-control-pilot
     runtime: static
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist

@@ -7,7 +7,7 @@ import {
   NEGOTIATION_ROUNDS,
   tx,
 } from "../game/story";
-import { MISSIONS } from "../game/missions";
+import { difficultyProfile, MISSIONS } from "../game/missions";
 import { HOLD_THRESHOLD } from "../game/campaign";
 import type { Locale } from "../simulator/types";
 
@@ -36,7 +36,6 @@ export function localeSwitchHtml(locale: Locale): string {
   const opts: Array<[Locale, string]> = [
     ["zh", "中文"],
     ["ja", "日本語"],
-    ["en", "EN"],
   ];
   return `<div class="locale-switch" role="group" aria-label="Language">${opts
     .map(
@@ -62,11 +61,60 @@ function difficultyPicker(locale: Locale, current: DifficultyTier, compact = fal
     </div>`;
 }
 
+function badgeCriteria(locale: Locale, id: BadgeId): string {
+  const criteria: Record<BadgeId, [string, string, string]> = {
+    "safety-first": ["处理至少 1 次故障，质量 ≥ 97%", "異常1件以上を復旧、品質 ≥ 97%", "Recover 1+ incident with quality ≥ 97%"],
+    "scan-master": ["OEE ≥ 88%，质量 ≥ 98%", "OEE ≥ 88%、品質 ≥ 98%", "OEE ≥ 88% and quality ≥ 98%"],
+    "link-keeper": ["专家以上处理 2 次故障，OEE ≥ 80%", "エキスパート以上で異常2件、OEE ≥ 80%", "Expert+: recover 2 incidents with OEE ≥ 80%"],
+    "press-commissioner": ["任务 1：质量 ≥ 98%，OEE ≥ 82%", "M1：品質 ≥ 98%、OEE ≥ 82%", "M1: quality ≥ 98%, OEE ≥ 82%"],
+    "capsule-specialist": ["任务 2：质量 ≥ 98.5%，OEE ≥ 84%", "M2：品質 ≥ 98.5%、OEE ≥ 84%", "M2: quality ≥ 98.5%, OEE ≥ 84%"],
+    "q-line-integrator": ["任务 3：质量 ≥ 98%，OEE ≥ 80%", "M3：品質 ≥ 98%、OEE ≥ 80%", "M3: quality ≥ 98%, OEE ≥ 80%"],
+    "blister-specialist": ["任务 4：质量 ≥ 98%，OEE ≥ 83%", "M4：品質 ≥ 98%、OEE ≥ 83%", "M4: quality ≥ 98%, OEE ≥ 83%"],
+    "cell-commander": ["任务 5 专家以上：质量 ≥ 98%，OEE ≥ 82%", "M5エキスパート以上：品質 ≥ 98%、OEE ≥ 82%", "M5 Expert+: quality ≥ 98%, OEE ≥ 82%"],
+    "campaign-master": ["解锁全部 5 个任务专属徽章", "5つのミッション専用バッジを全解除", "Unlock all 5 mission badges"],
+  };
+  return t(locale, ...criteria[id]);
+}
+
+function missionFocus(locale: Locale, missionId: string): string {
+  const focus: Record<string, [string, string, string]> = {
+    "M1-press": ["单机安全链与 SLMP 投运", "単機安全チェーンとSLMP立上げ", "Machine safety chain and SLMP startup"],
+    "M2-capsule": ["配方锁定与装量漂移恢复", "レシピロックと充填量ドリフト復旧", "Recipe lock and fill-drift recovery"],
+    "M3-bottle": ["Q 主站与远程 I/O 链路恢复", "QマスタとリモートI/O復旧", "Q master and remote-I/O recovery"],
+    "M4-blister": ["成型—封合顺序与质量窗口", "成形―シール順序と品質ウィンドウ", "Form-seal sequence and quality window"],
+    "M5-line": ["单元协同、通信韧性与 OEE", "セル協調、通信耐性、OEE", "Cell coordination, link resilience and OEE"],
+  };
+  return t(locale, ...(focus[missionId] ?? focus["M1-press"]));
+}
+
+function equipmentName(locale: Locale, id: string): string {
+  const names: Record<string, [string, string, string]> = {
+    "tablet-press": ["旋转压片机", "ロータリー打錠機", "Rotary tablet press"],
+    "capsule-filler": ["胶囊充填机", "カプセル充填機", "Capsule filler"],
+    "capsule-polisher": ["胶囊抛光机", "カプセルポリッシャ", "Capsule polisher"],
+    "metal-detector": ["金属检测", "金属検出", "Metal detector"],
+    "pill-counter": ["电子数粒机", "電子計数機", "Pill counter"],
+    capping: ["旋盖机", "キャッパー", "Capper"],
+    "induction-sealer": ["感应封口机", "誘導シーラ", "Induction sealer"],
+    "blister-packer": ["泡罩包装机", "PTP包装機", "Blister packer"],
+  };
+  const name = names[id];
+  return name ? t(locale, ...name) : id;
+}
+
 function badgeGrid(locale: Locale, unlocked: Record<string, number>, recent: BadgeId[] = []): string {
-  return `<div class="badge-grid">${BADGES.map((badge) => {
+  return `<div class="badge-grid">${BADGES.map((badge, index) => {
     const on = Boolean(unlocked[badge.id]);
     const fresh = recent.includes(badge.id);
-    return `<div class="badge-card ${on ? "on" : ""} ${fresh ? "fresh" : ""}"><i>${badge.icon}</i><span>${esc(tx(badge.title, locale))}</span></div>`;
+    return `<article class="badge-card ${on ? "on" : "locked"} ${fresh ? "fresh" : ""}">
+      <div class="badge-emblem"><i>${badge.icon}</i><small>${String(index + 1).padStart(2, "0")}</small></div>
+      <div class="badge-copy">
+        <span>${on ? t(locale, "已解锁", "解除済み", "Unlocked") : t(locale, "未解锁", "未解除", "Locked")}</span>
+        <b>${esc(tx(badge.title, locale))}</b>
+        <small>${esc(badgeCriteria(locale, badge.id))}</small>
+      </div>
+      <em aria-hidden="true">${on ? "✓" : "◇"}</em>
+    </article>`;
   }).join("")}</div>`;
 }
 
@@ -77,6 +125,7 @@ export function renderHub(
   now = Date.now(),
 ): string {
   const unlocked = BADGES.filter((badge) => campaign.badges[badge.id]).length;
+  const cleared = MISSIONS.filter((mission) => (best[mission.id] ?? 0) > 0).length;
   return `
     <div class="campaign-shell">
       <header class="brand-bar">
@@ -138,23 +187,47 @@ export function renderHub(
         </div>
       </section>
 
-      <h2 class="missions-title">${t(locale, "任务", "ミッション", "Missions")}</h2>
+      <section class="mission-section-head">
+        <div>
+          <p class="eyebrow">COMMISSIONING ROUTE / 01—05</p>
+          <h2 class="missions-title">${t(locale, "任务路线", "ミッションルート", "Mission route")}</h2>
+          <p>${t(locale, "从单机 FX 投运到 Q 单元集成；每个任务训练一种可复用的现场能力。", "FX単機立上げからQセル統合へ。各ミッションで再利用できる現場スキルを習得します。", "Progress from an FX machine startup to Q cell integration. Each mission teaches one reusable field skill.")}</p>
+        </div>
+        <div class="route-summary"><span>${t(locale, "已完成", "完了", "Cleared")}</span><b>${cleared}<small>/05</small></b></div>
+      </section>
+      <div class="mission-route" aria-label="${t(locale, "任务进度", "ミッション進捗", "Mission progress")}">
+        ${MISSIONS.map((mission, index) => `<div class="${best[mission.id] ? "cleared" : ""}"><i>${best[mission.id] ? "✓" : index + 1}</i><span>${mission.family}</span></div>`).join("")}
+      </div>
       <section class="mission-grid">
         ${MISSIONS.map((mission, index) => {
           const fails = campaign.failures[mission.id] ?? 0;
           const hold = Math.max(0, (campaign.holds[mission.id] ?? 0) - now);
           const held = fails >= HOLD_THRESHOLD;
+          const isCleared = (best[mission.id] ?? 0) > 0;
+          const status = held
+            ? t(locale, "线体锁定", "ラインロック", "Line hold")
+            : isCleared
+              ? t(locale, "已通关", "クリア", "Cleared")
+              : fails > 0
+                ? t(locale, "待重试", "再挑戦", "Retry")
+                : t(locale, "可执行", "実行可能", "Ready");
           return `
-            <button type="button" class="mission-card family-${mission.family.toLowerCase()} ${held ? "held" : ""}" data-open-mission="${index}">
-              <img src="${esc(mission.photo)}" alt="" />
-              <div>
-                <em class="cpu-pill">${mission.family} · ${esc(mission.cpuModel)}</em>
-                <h2>${esc(tx(mission.title, locale))}</h2>
-                <p>${esc(tx(mission.subtitle, locale))}</p>
-                <div class="mission-meta">
-                  <span>${t(locale, "最高分", "ベスト", "Best")} ${best[mission.id] ?? "—"}</span>
-                  <span>${held ? t(locale, "线体锁定", "ラインロック", "Line hold") : `${fails}/${HOLD_THRESHOLD}`}</span>
+            <button type="button" class="mission-card family-${mission.family.toLowerCase()} ${held ? "held" : ""} ${isCleared ? "cleared" : ""}" data-open-mission="${index}">
+              <div class="mission-card-photo">
+                <img src="${esc(mission.photo)}" alt="" />
+                <span class="mission-number">${String(index + 1).padStart(2, "0")}</span>
+                <em class="mission-status">${status}</em>
+              </div>
+              <div class="mission-card-body">
+                <div class="mission-card-top"><em class="cpu-pill">${mission.family} · ${esc(mission.cpuModel)}</em><code>${mission.id.toUpperCase()}</code></div>
+                <h3>${esc(tx(mission.title, locale))}</h3>
+                <p>${esc(missionFocus(locale, mission.id))}</p>
+                <div class="mission-stats">
+                  <span><small>${t(locale, "最高分", "ベスト", "Best")}</small><b>${best[mission.id] ?? "—"}</b></span>
+                  <span><small>${t(locale, "设备", "設備", "Stations")}</small><b>${mission.equipment.length}</b></span>
+                  <span><small>${t(locale, "失败", "失敗", "Fails")}</small><b>${fails}/${HOLD_THRESHOLD}</b></span>
                 </div>
+                <div class="mission-enter"><span>${t(locale, "打开任务简报", "ブリーフを開く", "Open mission brief")}</span><b>→</b></div>
                 ${hold > 0 ? `<small class="hold-flag">${t(locale, "剩余", "残り", "Left")} ${formatHold(hold)}</small>` : ""}
               </div>
             </button>`;
@@ -162,9 +235,10 @@ export function renderHub(
       </section>
       <section class="panel campaign-badges">
         <div class="badge-center-heading">
-          <h3>${t(locale, "徽章", "バッジ", "Badges")}</h3>
-          <strong>${unlocked}/${BADGES.length}</strong>
+          <div><p class="eyebrow">ENGINEER QUALIFICATIONS</p><h2>${t(locale, "能力徽章", "スキルバッジ", "Skill badges")}</h2><p>${t(locale, "每枚徽章都有明确的质量、OEE 或故障恢复条件。", "各バッジには品質、OEE、異常復旧の明確な条件があります。", "Every badge has a clear quality, OEE, or recovery condition.")}</p></div>
+          <div class="badge-total"><span>${t(locale, "解锁进度", "解除進捗", "Unlocked")}</span><strong>${unlocked}<small>/${BADGES.length}</small></strong></div>
         </div>
+        <div class="badge-progress"><i style="width:${(unlocked / BADGES.length) * 100}%"></i></div>
         ${badgeGrid(locale, campaign.badges)}
       </section>
       <p class="campaign-foot">${t(
@@ -181,6 +255,8 @@ export function renderBrief(
   mission: MissionDef,
   campaign: CampaignState,
 ): string {
+  const profile = difficultyProfile(mission, campaign.difficulty);
+  const estimatedSec = Math.ceil((mission.recipe.batchTarget / mission.recipe.speedPpm) * 60);
   const profileNote = mission.family === "Q"
     ? t(
         locale,
@@ -205,28 +281,42 @@ export function renderBrief(
         ${localeSwitchHtml(locale)}
       </header>
       <section class="brief-layout">
-        <img class="brief-photo" src="${esc(mission.photo)}" alt="" />
-        <div class="panel">
-          <p class="cpu-note">${profileNote}</p>
-          <h3>${t(locale, "设备", "設備", "Equipment")}</h3>
-          <ul>${mission.equipment.map((id) => `<li><code>${esc(id)}</code></li>`).join("")}</ul>
+        <div class="brief-visual">
+          <img class="brief-photo" src="${esc(mission.photo)}" alt="" />
+          <div class="brief-photo-overlay"><span>${t(locale, "任务重点", "ミッション要点", "Mission focus")}</span><strong>${esc(missionFocus(locale, mission.id))}</strong></div>
+          <div class="brief-visual-stats">
+            <div><span>${t(locale, "批次目标", "バッチ目標", "Batch")}</span><b>${mission.recipe.batchTarget} pcs</b></div>
+            <div><span>${t(locale, "预计运行", "予定時間", "Est. run")}</span><b>~${estimatedSec}s</b></div>
+            <div><span>${t(locale, "远程站", "遠隔局", "Remotes")}</span><b>${mission.remotes.length}</b></div>
+          </div>
+        </div>
+        <div class="panel brief-console">
+          <div class="brief-console-head"><div><span>${mission.family} CPU PROFILE</span><b>${esc(mission.cpuModel)}</b></div><em>${mission.family === "Q" ? "HEX I/O" : "OCTAL I/O"}</em></div>
+          <div class="cpu-note"><i>${mission.family}</i><p>${profileNote}</p></div>
+          <div class="brief-targets">
+            <div><span>${t(locale, "质量门槛", "品質基準", "Quality gate")}</span><b>≥ ${profile.qualityPct}%</b></div>
+            <div><span>OEE GATE</span><b>≥ ${profile.oeePct}%</b></div>
+            <div><span>${t(locale, "通信端口", "通信ポート", "Port")}</span><b>${mission.family === "Q" ? "5000" : "5007"}</b></div>
+          </div>
+          <div class="brief-section-head"><span>01</span><div><b>${t(locale, "控制对象", "制御対象", "Controlled equipment")}</b><small>${mission.equipment.length} ${t(locale, "个电动设备", "台の電動設備", "electric stations")}</small></div></div>
+          <div class="equipment-chip-grid">${mission.equipment.map((id, index) => `<div><span>${String(index + 1).padStart(2, "0")}</span><b>${esc(equipmentName(locale, id))}</b><code>${esc(id)}</code></div>`).join("")}</div>
           ${
             mission.remotes.length
-              ? `<h3>CC-Link</h3><ol>${mission.remotes
-                  .map((remote) => `<li>ST${remote.id} ${esc(tx(remote.name, locale))}</li>`)
-                  .join("")}</ol>`
+              ? `<div class="brief-section-head"><span>02</span><div><b>CC-Link</b><small>${t(locale, "远程站拓扑", "遠隔局トポロジー", "Remote topology")}</small></div></div><div class="remote-chain">${mission.remotes
+                  .map((remote) => `<div><i></i><span>ST${String(remote.id).padStart(2, "0")}</span><b>${esc(tx(remote.name, locale))}</b></div>`)
+                  .join("")}</div>`
               : ""
           }
-          <h3>${t(locale, "操作链", "操作チェーン", "Start chain")}</h3>
+          <div class="brief-section-head"><span>${mission.remotes.length ? "03" : "02"}</span><div><b>${t(locale, "启动许可链", "起動許可チェーン", "Start permissive chain")}</b><small>${t(locale, "必须按顺序完成", "順番に完了", "Complete in order")}</small></div></div>
           <ol class="start-chain">
-            <li>${t(locale, "主电源", "主電源", "Main power")}</li>
-            <li>${t(locale, "保存并连接以太网", "Ethernetを保存して接続", "Save and connect Ethernet")}</li>
-            <li>${t(locale, "确认 X0/X1/X2，安全复位", "X0/X1/X2確認、安全リセット", "Prove X0/X1/X2, safety reset")}</li>
-            <li>${t(locale, "写入配方并回读", "レシピ書込み・照合", "Write and verify recipe")}</li>
-            <li>AUTO → START</li>
+            <li><span>01</span><b>${t(locale, "主电源", "主電源", "Main power")}</b><small>24 VDC</small></li>
+            <li><span>02</span><b>${t(locale, "连接以太网", "Ethernet接続", "Connect Ethernet")}</b><small>${mission.family === "Q" ? "MC 3E" : "SLMP 3E"}</small></li>
+            <li><span>03</span><b>${t(locale, "安全复位", "安全リセット", "Safety reset")}</b><small>X0 · X1 · X2</small></li>
+            <li><span>04</span><b>${t(locale, "写入并回读", "書込み・照合", "Write + verify")}</b><small>D100—D104</small></li>
+            <li><span>05</span><b>AUTO → START</b><small>M10 · M20</small></li>
           </ol>
-          ${difficultyPicker(locale, campaign.difficulty, true)}
-          <div class="actions">
+          <div class="brief-difficulty"><div><span>${t(locale, "时间压力", "時間プレッシャー", "Timed pressure")}</span><b>${t(locale, "任务计时开始后，压力将从 L1 升至 L3；更高难度会缩短升级间隔。", "計時開始後、プレッシャーはL1からL3へ上昇。高難易度ほど間隔が短くなります。", "Once the mission clock starts, pressure rises from L1 to L3. Higher modes shorten each escalation interval.")}</b></div>${difficultyPicker(locale, campaign.difficulty)}</div>
+          <div class="actions brief-actions">
             <button type="button" class="btn-primary" data-action="run-mission">${t(locale, "进入 HMI", "HMIへ", "Enter HMI")}</button>
             <button type="button" class="btn-ghost" data-nav="hub">${t(locale, "返回任务", "ミッションへ戻る", "All missions")}</button>
           </div>

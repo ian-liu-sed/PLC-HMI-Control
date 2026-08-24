@@ -298,6 +298,40 @@ export const MISSIONS: MissionDef[] = [
   },
 ];
 
+export interface MissionPressureState {
+  level: 1 | 2 | 3;
+  nextAtMs: number | null;
+  progressPct: number;
+}
+
+export function pressureThresholds(difficulty: DifficultyTier): [number, number] {
+  if (difficulty === 3) return [7_000, 16_000];
+  if (difficulty === 2) return [12_000, 26_000];
+  return [18_000, 36_000];
+}
+
+export function missionPressure(
+  difficulty: DifficultyTier,
+  elapsedMs: number,
+): MissionPressureState {
+  const [level2At, level3At] = pressureThresholds(difficulty);
+  if (elapsedMs < level2At) {
+    return {
+      level: 1,
+      nextAtMs: level2At,
+      progressPct: Math.min(100, (elapsedMs / level2At) * 100),
+    };
+  }
+  if (elapsedMs < level3At) {
+    return {
+      level: 2,
+      nextAtMs: level3At,
+      progressPct: Math.min(100, ((elapsedMs - level2At) / (level3At - level2At)) * 100),
+    };
+  }
+  return { level: 3, nextAtMs: null, progressPct: 100 };
+}
+
 function qualityDrift(atMs: number, id: string): MissionIncident {
   return {
     id,
@@ -355,11 +389,17 @@ export function difficultyProfile(
   difficulty: DifficultyTier,
 ): DifficultyProfile {
   const q = mission.family === "Q";
+  const [level2At, level3At] = pressureThresholds(difficulty);
   if (difficulty === 1) {
     return {
       qualityPct: 96,
       oeePct: 68,
-      incidents: [qualityDrift(8000, `${mission.id}-d1-q`)],
+      incidents: [
+        qualityDrift(level2At, `${mission.id}-d1-q`),
+        q
+          ? remoteIncident(level3At, `${mission.id}-d1-r`)
+          : doorIncident(level3At, `${mission.id}-d1-d`),
+      ],
     };
   }
   if (difficulty === 2) {
@@ -367,10 +407,11 @@ export function difficultyProfile(
       qualityPct: 98,
       oeePct: 78,
       incidents: [
-        qualityDrift(7000, `${mission.id}-d2-q`),
+        qualityDrift(level2At, `${mission.id}-d2-q`),
         q
-          ? remoteIncident(16000, `${mission.id}-d2-r`)
-          : doorIncident(15000, `${mission.id}-d2-d`),
+          ? remoteIncident(level3At, `${mission.id}-d2-r`)
+          : doorIncident(level3At, `${mission.id}-d2-d`),
+        linkIncident(level3At + 12_000, `${mission.id}-d2-l`),
       ],
     };
   }
@@ -378,11 +419,11 @@ export function difficultyProfile(
     qualityPct: 99,
     oeePct: 84,
     incidents: [
-      qualityDrift(6000, `${mission.id}-d3-q`),
+      qualityDrift(level2At, `${mission.id}-d3-q`),
       q
-        ? remoteIncident(12000, `${mission.id}-d3-r`)
-        : doorIncident(12000, `${mission.id}-d3-d`),
-      linkIncident(22000, `${mission.id}-d3-l`),
+        ? remoteIncident(level3At, `${mission.id}-d3-r`)
+        : doorIncident(level3At, `${mission.id}-d3-d`),
+      linkIncident(level3At + 9_000, `${mission.id}-d3-l`),
     ],
   };
 }

@@ -1,6 +1,6 @@
 # Goal: SED Control Pilot
 
-Turn `FX Line Control Lab` into a long-running **serious game** in the same family as [SED Line Pilot](https://github.com/ian-liu-sed/a-simple-game): a player commissions and operates **Mitsubishi FX and Q series PLCs** that control **SED Machines** pharmaceutical equipment.
+Turn `FX Line Control Lab` into a long-running **serious game** in the same family as [SED Line Pilot](https://github.com/ian-liu-sed/a-simple-game): a player commissions and operates **FX and Q series PLCs** that control **SED Machines** pharmaceutical equipment.
 
 GitHub `ian-liu-sed/PLC-HMI-Control` is private or not visible to this session (404). Local source of truth: `Desktop/code/plc-hmi`. Reference game: `Desktop/code/sed-game` / `ian-liu-sed/a-simple-game`.
 
@@ -19,7 +19,7 @@ You are a controls engineer on an SED solid-dose line. You do not drag sliders o
 3. Every mission maps to real SED equipment roles from Line Pilot (press, capsule, bottle pack, blister, full line).
 4. Campaign layer from Line Pilot: difficulty, incidents, batch report, 3-fail / 1-hour hold, CAPA checklist, client call, badges, cookie persistence.
 5. Physical safety never rides on HMI/Ethernet. Communication restore never auto-restarts motion.
-6. Languages: 中文 / 日本語 / English.
+6. Languages: 中文 / 日本語.
 7. Independent of vendor logos and proprietary project files. Series names are technical compatibility only.
 
 ## Mission map
@@ -39,7 +39,7 @@ You are a controls engineer on an SED solid-dose line. You do not drag sliders o
 - [x] Q missions expose SM/SD and at least one CC-Link remote-station fault that stops motion without auto-restart.
 - [x] Existing PLC safety tests still pass (start chain, E-stop, 3 s heartbeat, recipe lock, unpowered outputs).
 - [x] New tests cover Q addressing, remote-station trip, mission pass/fail, campaign hold.
-- [x] `npm test` and `npm run build` succeed (2026-08-24: 14 tests, production build ok).
+- [x] `npm test` and `npm run build` succeed (2026-08-24: 18 tests, production build ok).
 - [x] README states FX + Q, SED machines, and the training-only disclaimer.
 
 Foundation shipped locally. Remaining depth is still in phases 2–3 below — this goal stays open until process physics, GX Works notes, and incident polish land.

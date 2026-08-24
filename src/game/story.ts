@@ -13,9 +13,9 @@ export const DIFFICULTY_LABEL: Record<DifficultyTier, I18nText> = {
 
 export const DIFFICULTY_DETAIL: Record<DifficultyTier, I18nText> = {
   1: {
-    zh: "一次过程扰动。通过窗口较宽。适合第一次走通上电—通信—复位—启动。",
-    ja: "工程外乱は1回。合格窓は広め。電源—通信—リセット—起動の習得向け。",
-    en: "One process disturbance and a wider pass window. Learn power, link, reset, start.",
+    zh: "两次分阶段扰动。通过窗口较宽。适合第一次走通上电—通信—复位—启动。",
+    ja: "段階的な工程外乱は2回。合格窓は広め。電源—通信—リセット—起動の習得向け。",
+    en: "Two staged disturbances and a wider pass window. Learn power, link, reset, start.",
   },
   2: {
     zh: "多重扰动，含安全门或 CC-Link 远程站。配方与复位必须分开做对。",

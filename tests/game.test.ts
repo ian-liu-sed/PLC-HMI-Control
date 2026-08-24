@@ -6,7 +6,13 @@ import {
   recordOutcome,
   type CampaignState,
 } from "../src/game/campaign";
-import { MISSIONS, missionSimConfig } from "../src/game/missions";
+import {
+  MISSIONS,
+  difficultyProfile,
+  missionPressure,
+  missionSimConfig,
+  pressureThresholds,
+} from "../src/game/missions";
 import { PlcLineSimulator } from "../src/simulator/plc";
 
 function blankCampaign(): CampaignState {
@@ -91,6 +97,42 @@ describe("mission scoring", () => {
     expect(plc.abortMission().ok).toBe(true);
     expect(plc.getSnapshot().result?.passed).toBe(false);
     expect(plc.getSnapshot().result?.aborted).toBe(true);
+  });
+});
+
+describe("timed mission pressure", () => {
+  it("raises pressure from L1 to L3 and accelerates the harder modes", () => {
+    expect(missionPressure(1, 0).level).toBe(1);
+    expect(missionPressure(1, 18_000).level).toBe(2);
+    expect(missionPressure(1, 36_000).level).toBe(3);
+    expect(pressureThresholds(3)[0]).toBeLessThan(pressureThresholds(1)[0]);
+    expect(pressureThresholds(3)[1]).toBeLessThan(pressureThresholds(1)[1]);
+  });
+
+  it("schedules operational incidents at each pressure rise", () => {
+    const mission = MISSIONS.find((item) => item.id === "M3-bottle")!;
+    const profile = difficultyProfile(mission, 3);
+    const [levelTwoAt, levelThreeAt] = pressureThresholds(3);
+    expect(profile.incidents).toContainEqual(
+      expect.objectContaining({ atMs: levelTwoAt, kind: "quality" }),
+    );
+    expect(profile.incidents).toContainEqual(
+      expect.objectContaining({ atMs: levelThreeAt, kind: "remote" }),
+    );
+  });
+
+  it("fires the first pressure incident from mission time, not page idle time", () => {
+    const mission = MISSIONS.find((item) => item.id === "M3-bottle")!;
+    const plc = new PlcLineSimulator(missionSimConfig(mission, 3, 19));
+    for (let i = 0; i < 20; i += 1) plc.tick(1_000);
+    expect(plc.getSnapshot().attentionDevices).toEqual([]);
+
+    arm(plc);
+    for (let i = 0; i < 6; i += 1) plc.tick(1_000);
+    plc.tick(999);
+    expect(plc.getSnapshot().attentionDevices).toEqual([]);
+    plc.tick(1);
+    expect(plc.getSnapshot().attentionDevices).toEqual(["D101", "D102"]);
   });
 });
 

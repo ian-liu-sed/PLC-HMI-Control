@@ -1,6 +1,6 @@
 # SED Control Pilot
 
-Serious game: commission **Mitsubishi FX and Q series PLCs** that control [SED Machines](https://sedmachines.com) pharmaceutical equipment. Same campaign family as [SED Line Pilot](https://github.com/ian-liu-sed/a-simple-game), but the loop is a real HMI/PLC scan — power, Ethernet, safety reset, recipe write/verify, AUTO, START, and recovery.
+Serious game: commission **FX and Q series PLCs** that control [SED Machines](https://sedmachines.com) pharmaceutical equipment. Same campaign family as [SED Line Pilot](https://github.com/ian-liu-sed/a-simple-game), but the loop is a real HMI/PLC scan — power, Ethernet, safety reset, recipe write/verify, AUTO, START, and recovery.
 
 This used to be FX Line Control Lab. It is now a mission-based trainer. Training simulation only. Not a machine control system.
 
@@ -35,7 +35,7 @@ Q missions show SM400 (RUN always-ON), SD200 scan time, and remote stations X100
 | M4 | FX5U | SED-P-A blister + metal detect |
 | M5 | Q13UDV + FX5U | Full solid-dose cell |
 
-Languages: 中文 / 日本語 / English. Difficulty: Assistant / Expert / Legend.
+Languages: 中文 / 日本語. Difficulty: Assistant / Expert / Legend.
 
 ## Run
 

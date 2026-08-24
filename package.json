@@ -2,7 +2,7 @@
   "name": "sed-control-pilot",
   "version": "2.0.0",
   "private": true,
-  "description": "Serious game: Mitsubishi FX/Q PLC and HMI commissioning on SED pharmaceutical machines",
+  "description": "Serious game: FX/Q PLC and HMI commissioning on SED pharmaceutical machines",
   "type": "module",
   "scripts": {
     "dev": "vite",

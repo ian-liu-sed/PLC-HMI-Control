@@ -125,6 +125,7 @@ export interface MissionScore {
 
 export interface PlcSnapshot {
   nowMs: number;
+  missionElapsedMs: number;
   powered: boolean;
   connected: boolean;
   running: boolean;

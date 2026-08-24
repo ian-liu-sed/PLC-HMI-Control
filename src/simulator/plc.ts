@@ -55,6 +55,8 @@ function round(value: number, digits = 1): number {
 
 export class PlcLineSimulator {
   private nowMs = 0;
+  private missionElapsedMs = 0;
+  private missionStarted = false;
   private powered = false;
   private connected = false;
   private running = false;
@@ -148,6 +150,7 @@ export class PlcLineSimulator {
   tick(dtMs: number): PlcSnapshot {
     const dt = clamp(Number.isFinite(dtMs) ? dtMs : 0, 0, 1000);
     this.nowMs += dt;
+    if (this.missionStarted && !this.result) this.missionElapsedMs += dt;
 
     if (this.powered && dt > 0) {
       const scanTime = this.currentScanTime();
@@ -308,6 +311,7 @@ export class PlcLineSimulator {
 
     if (this.completed) this.resetBatchCounters();
     this.running = true;
+    this.missionStarted = true;
     this.completed = false;
     this.result = null;
     this.step = 10;
@@ -489,13 +493,15 @@ export class PlcLineSimulator {
   }
 
   private maybeFireIncidents(): void {
+    if (this.activeAlarm || this.pendingIncidentRecovery) return;
     for (const incident of this.incidents) {
       if (this.firedIncidents.has(incident.id)) continue;
-      if (this.nowMs < incident.atMs) continue;
+      if (this.missionElapsedMs < incident.atMs) continue;
       this.firedIncidents.add(incident.id);
       this.pendingIncidentRecovery = true;
       this.addEvent("warning", incident.message.zh, incident.message.ja, incident.message.en);
       this.injectFault(incident.kind);
+      break;
     }
   }
 
@@ -808,6 +814,7 @@ export class PlcLineSimulator {
   private snapshot(): PlcSnapshot {
     return {
       nowMs: this.nowMs,
+      missionElapsedMs: this.missionElapsedMs,
       powered: this.powered,
       connected: this.connected,
       running: this.running,

@@ -19,7 +19,7 @@ import {
   type CampaignState,
 } from "./game/campaign";
 import { evaluateBadges, type BadgeId } from "./game/badges";
-import { MISSIONS, missionSimConfig } from "./game/missions";
+import { MISSIONS, missionPressure, missionSimConfig } from "./game/missions";
 import type { CampaignScreen, DifficultyTier, MissionDef } from "./game/types";
 import { NEGOTIATION_PASS, NEGOTIATION_ROUNDS } from "./game/story";
 import {
@@ -113,14 +113,13 @@ END_CASE;`;
 function loadLocale(): Locale {
   try {
     const stored = localStorage.getItem("sed-control-locale");
-    if (stored === "zh" || stored === "ja" || stored === "en") return stored;
+    if (stored === "zh" || stored === "ja") return stored;
   } catch {
     // Storage may be disabled; the simulator still works.
   }
   const nav = navigator.language.toLowerCase();
   if (nav.startsWith("ja")) return "ja";
-  if (nav.startsWith("zh")) return "zh";
-  return "en";
+  return "zh";
 }
 
 function loadBest(): Record<string, number> {
@@ -165,6 +164,12 @@ function clock(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
   return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function escalationLabel(): string {
+  const pressure = missionPressure(campaign.difficulty, snapshot.missionElapsedMs);
+  if (pressure.nextAtMs == null) return t("最高压力", "最大プレッシャー", "MAX PRESSURE");
+  return `${t("下次升级", "次の上昇", "NEXT RISE")} ${clock(Math.max(0, pressure.nextAtMs - snapshot.missionElapsedMs))}`;
 }
 
 function eventTime(ms: number): string {
@@ -235,7 +240,11 @@ function patchLive(): void {
   setLive("live-state", stateLabel());
   setLive("live-cpu", snapshot.powered ? "CPU RUN" : "CPU STOP");
   setLive("live-scan", snapshot.powered ? `${snapshot.scanTimeMs.toFixed(2)} ms` : "—");
-  setLive("live-clock", clock(snapshot.nowMs));
+  setLive("live-clock", clock(snapshot.missionElapsedMs));
+  setLive("live-mission-time", clock(snapshot.missionElapsedMs));
+  const pressure = missionPressure(campaign.difficulty, snapshot.missionElapsedMs);
+  setLive("live-pressure-label", `${t("压力", "プレッシャー", "PRESSURE")} L${pressure.level}`);
+  setLive("live-escalation", escalationLabel());
   setLive("live-oee", pct(m.oeePct));
   setLive("live-oee-num", String(Math.round(m.oeePct)));
   setLive("live-total", `${m.total.toLocaleString()}`);
@@ -266,6 +275,15 @@ function patchLive(): void {
   if (ring) ring.style.setProperty("--progress", `${m.oeePct * 3.6}deg`);
   const scanBar = document.getElementById("live-scan-bar");
   if (scanBar) scanBar.style.width = `${snapshot.powered ? Math.min(100, snapshot.scanTimeMs * 18) : 0}%`;
+  const pressureBar = document.getElementById("live-pressure-bar");
+  if (pressureBar) pressureBar.style.width = `${pressure.progressPct}%`;
+  const timer = document.getElementById("live-mission-timer");
+  if (timer) timer.className = `mission-timer level-${pressure.level}`;
+  document.querySelectorAll<HTMLElement>("[data-pressure-level]").forEach((el) => {
+    const level = Number(el.dataset.pressureLevel);
+    el.classList.toggle("active", level === pressure.level);
+    el.classList.toggle("passed", level < pressure.level);
+  });
 
   document.querySelectorAll<HTMLElement>("[data-station]").forEach((el) => {
     const kind = el.dataset.station ?? "";
@@ -479,6 +497,7 @@ function finishMission(): void {
 }
 
 function renderTopbar(): string {
+  const pressure = missionPressure(campaign.difficulty, snapshot.missionElapsedMs);
   return `
     <header class="topbar">
       <div class="brand-block">
@@ -489,6 +508,12 @@ function renderTopbar(): string {
         </div>
       </div>
       <div class="top-status" aria-label="${t("系统状态", "システム状態")}">
+        <div class="mission-timer level-${pressure.level}" id="live-mission-timer">
+          <div class="mission-clock"><span>MISSION TIME</span><strong id="live-mission-time">${clock(snapshot.missionElapsedMs)}</strong></div>
+          <div class="pressure-copy"><span id="live-pressure-label">${t("压力", "プレッシャー", "PRESSURE")} L${pressure.level}</span><b id="live-escalation">${escalationLabel()}</b></div>
+          <div class="pressure-track"><i id="live-pressure-bar" style="width:${pressure.progressPct}%"></i></div>
+          <div class="pressure-levels" aria-hidden="true">${[1, 2, 3].map((level) => `<i data-pressure-level="${level}" class="${level === pressure.level ? "active" : level < pressure.level ? "passed" : ""}">L${level}</i>`).join("")}</div>
+        </div>
         <div class="status-pill ${snapshot.connected ? "is-on" : ""}" id="live-link-pill">
           <span class="status-dot"></span>
           <span id="live-link-label">${snapshot.connected ? t("通信在线", "通信オンライン", "Link up") : t("通信离线", "通信オフライン", "Link down")}</span>
@@ -502,7 +527,6 @@ function renderTopbar(): string {
         <div class="locale-switch" role="group" aria-label="Language">
           <button type="button" data-locale="zh" class="${locale === "zh" ? "active" : ""}">中文</button>
           <button type="button" data-locale="ja" class="${locale === "ja" ? "active" : ""}">日本語</button>
-          <button type="button" data-locale="en" class="${locale === "en" ? "active" : ""}">EN</button>
         </div>
       </div>
     </header>
@@ -560,7 +584,7 @@ function renderPageHead(kicker: string, titleZh: string, titleJa: string, descZh
       </div>
       <div class="page-meta">
         <span>${t("批次", "バッチ")} <b>${esc(snapshot.batchId)}</b></span>
-        <span>${t("周期", "サイクル", "Cycle")} <b id="live-clock">${clock(snapshot.nowMs)}</b></span>
+        <span>${t("任务计时", "ミッション時間", "Mission time")} <b id="live-clock">${clock(snapshot.missionElapsedMs)}</b></span>
       </div>
     </section>
   `;

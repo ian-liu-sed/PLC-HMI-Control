@@ -143,7 +143,7 @@ export function renderHub(
       </header>
 
       <section class="hero">
-        <img class="hero-photo" src="./sed-line-hero.jpg" alt="${t(locale, "SED 固体制剂线", "SED固形剤ライン", "SED solid-dose line")}" />
+        <img class="hero-photo" src="/sed-line-hero.jpg" srcset="/sed-line-hero-sm.jpg 720w, /sed-line-hero.jpg 1280w" sizes="(max-width: 800px) 100vw, 1100px" alt="${t(locale, "SED 固体制剂线", "SED固形剤ライン", "SED solid-dose line")}" />
         <div class="hero-copy">
           <p class="eyebrow">FX5U · Q03UDE · Q13UDV</p>
           <h2>${t(locale, "你是控制工程师，不是旁观者", "あなたは制御エンジニアだ", "You are the controls engineer")}</h2>

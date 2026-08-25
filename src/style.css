@@ -174,11 +174,34 @@ textarea {
   font-weight: 700;
 }
 
-.tutorial-hint {
+.tutorial-now {
   margin: 0;
+  color: #ffd27a;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.tutorial-how {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.tutorial-how li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  align-items: start;
   color: #d7fff0;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.45;
+}
+
+.tutorial-how li b {
+  color: var(--amber);
+  font-family: var(--mono);
 }
 
 .tutorial-pulse {

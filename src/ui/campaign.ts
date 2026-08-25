@@ -317,7 +317,7 @@ export function renderBrief(
           </ol>
           ${
             campaign.difficulty === 1
-              ? `<p class="brief-tutorial-note">${t(locale, "助理难度会在 HMI 顶部逐步提示。开局 M0 为 NG 是正常的：先上电、NET 连接，再点 M0 卡片或「安全复位」锁存。专家/传奇不给逐步提示。", "アシスタント難易度はHMI上部で手順を出す。開始時のM0=NGは正常。電源とNET接続の後、M0カードまたは「安全リセット」でラッチ。エキスパート/レジェンドは手順を出さない。", "Assistant mode shows a live start-chain tutorial. M0 starts NG on purpose: power, connect NET, then click the M0 tile or Safety reset. Expert/Legend hide the walkthrough.")}</p>`
+              ? `<p class="brief-tutorial-note">${t(locale, "助理会在 HMI 顶部给出逐步操作。开局 M0=NG 正常。配方闪烁时先 STOP 再改 D101/D102 并写入。安全门 NG 时先点 X1 或「清除条件」，不要先点 M0。专家/传奇不给步骤。", "アシスタントはHMI上部で手順を出す。開始時M0=NGは正常。レシピ点滅はSTOPしてからD101/D102を書いて書込み。扉NGは先にX1または条件解除。M0は後。エキスパート/レジェンドは手順なし。", "Assistant shows live numbered steps. M0 starts NG. If recipe flashes: STOP, edit D101/D102, Write. If the guard is NG: click X1 or Clear faults before M0. Expert/Legend hide steps.")}</p>`
               : `<p class="brief-tutorial-note hard">${t(locale, "当前难度不提供逐步教程。安全链锁存、通信恢复后的再启动都要自己完成。", "この難易度では手順教程なし。安全ラッチと通信復帰後の再起動は自分で行う。", "This difficulty has no step tutorial. Latch the safety chain and restart yourself after a restored link.")}</p>`
           }
           <div class="brief-difficulty"><div><span>${t(locale, "时间压力", "時間プレッシャー", "Timed pressure")}</span><b>${t(locale, "任务计时开始后，压力将从 L1 升至 L3；更高难度会缩短升级间隔。", "計時開始後、プレッシャーはL1からL3へ上昇。高難易度ほど間隔が短くなります。", "Once the mission clock starts, pressure rises from L1 to L3. Higher modes shorten each escalation interval.")}</b></div>${difficultyPicker(locale, campaign.difficulty)}</div>

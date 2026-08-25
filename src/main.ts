@@ -23,7 +23,7 @@ import { MISSIONS, missionPressure, missionSimConfig } from "./game/missions";
 import type { CampaignScreen, DifficultyTier, MissionDef } from "./game/types";
 import { NEGOTIATION_PASS, NEGOTIATION_ROUNDS } from "./game/story";
 import {
-  nextStartStep,
+  nextGuideStep,
   renderAssistantCoach,
   tutorialPulseSelector,
 } from "./game/tutorial";
@@ -335,6 +335,31 @@ function patchLive(): void {
   document.querySelectorAll<HTMLElement>("[data-device]").forEach((el) => {
     el.classList.toggle("attention", snapshot.attentionDevices.includes(el.dataset.device ?? ""));
   });
+  const recipeLock = document.querySelector(".recipe-panel .lock-state");
+  if (recipeLock) {
+    recipeLock.textContent = snapshot.running ? t("运行锁定", "運転中ロック") : t("可编辑", "編集可");
+  }
+  document.querySelectorAll<HTMLInputElement>("#recipe-form input").forEach((input) => {
+    input.disabled = snapshot.running;
+  });
+  document.querySelector<HTMLButtonElement>(".save-recipe")?.toggleAttribute("disabled", snapshot.running);
+
+  const m0 = document.querySelector<HTMLElement>('[data-cond="M0"]');
+  if (m0) {
+    const fieldOk =
+      snapshot.inputs.eStopHealthy && snapshot.inputs.safetyDoorClosed && snapshot.inputs.driveHealthy;
+    const m0Ok = snapshot.safetyReset && fieldOk;
+    let hint = m0.querySelector(".cond-next");
+    const showHint = campaign.difficulty === 1 && !m0Ok && fieldOk;
+    if (showHint && !hint) {
+      const small = document.createElement("small");
+      small.className = "cond-next";
+      small.textContent = t("点此复位 M0", "ここを押してM0リセット", "Click to latch M0");
+      m0.querySelector("span")?.appendChild(small);
+    } else if (!showHint && hint) {
+      hint.remove();
+    }
+  }
 
   const events = document.getElementById("live-events");
   if (events) {
@@ -358,19 +383,20 @@ function patchLive(): void {
   const coach = document.getElementById("live-coach");
   if (coach) {
     if (campaign.difficulty === 1) {
-      const key = `${locale}:${nextStartStep(snapshot)}`;
+      const key = `${locale}:${nextGuideStep(snapshot)}:${snapshot.running}:${snapshot.attentionDevices.join(",")}`;
       if (key !== lastTutorialKey) {
         lastTutorialKey = key;
         const html = renderAssistantCoach(locale, snapshot).trim();
-        coach.outerHTML = html;
+        if (html) coach.outerHTML = html;
+        else coach.remove();
       }
     } else {
       coach.hidden = snapshot.running || snapshot.completed || campaign.difficulty === 3;
     }
   }
   document.querySelectorAll(".tutorial-pulse").forEach((el) => el.classList.remove("tutorial-pulse"));
-  if (campaign.difficulty === 1 && !snapshot.running && !snapshot.completed) {
-    const selector = tutorialPulseSelector(nextStartStep(snapshot));
+  if (campaign.difficulty === 1 && !snapshot.completed) {
+    const selector = tutorialPulseSelector(nextGuideStep(snapshot));
     if (selector) {
       document.querySelectorAll(selector).forEach((el) => el.classList.add("tutorial-pulse"));
     }
@@ -403,7 +429,7 @@ function render(): void {
     ${renderToast()}
   `;
   lastAlarmCode = snapshot.activeAlarm?.code ?? null;
-  lastTutorialKey = campaign.difficulty === 1 ? `${locale}:${nextStartStep(snapshot)}` : "";
+  lastTutorialKey = campaign.difficulty === 1 ? `${locale}:${nextGuideStep(snapshot)}:${snapshot.running}:${snapshot.attentionDevices.join(",")}` : "";
 }
 
 function renderCampaign(): string {
@@ -751,16 +777,20 @@ function renderControlPanel(): string {
 }
 
 function condition(tag: string, label: string, pass: boolean, latch = false): string {
+  const fieldOk =
+    snapshot.inputs.eStopHealthy && snapshot.inputs.safetyDoorClosed && snapshot.inputs.driveHealthy;
   const hint =
-    campaign.difficulty === 1 && latch && !pass
+    campaign.difficulty === 1 && latch && !pass && fieldOk
       ? `<small class="cond-next">${t("点此复位 M0", "ここを押してM0リセット", "Click to latch M0")}</small>`
-      : "";
+      : campaign.difficulty === 1 && !pass && tag === "X1"
+        ? `<small class="cond-next">${t("点此清除门故障", "扉異常を解除", "Click to clear guard")}</small>`
+        : "";
   return `<button type="button" class="condition ${pass ? "pass" : "fail"}" data-cond="${tag}"><i></i><span><b>${tag}</b>${label}${hint}</span><em>${pass ? "OK" : "NG"}</em></button>`;
 }
 
 function renderLiveCoach(): string {
   if (campaign.difficulty === 1) {
-    if (snapshot.running || snapshot.completed) return "";
+    if (snapshot.completed) return "";
     return renderAssistantCoach(locale, snapshot);
   }
   if (campaign.difficulty === 3 || snapshot.running || snapshot.completed) return "";
@@ -1291,11 +1321,13 @@ app.addEventListener("click", (event) => {
     }
     if (tag === "X1" || tag === "X2") {
       const okField = tag === "X1" ? snapshot.inputs.safetyDoorClosed : snapshot.inputs.driveHealthy;
+      if (!okField) {
+        handleResult(plc.clearInjectedFaults());
+        return;
+      }
       toast = {
-        text: okField
-          ? t("现场条件已 OK。下一步点 M0 或安全复位。", "現場条件はOK。次はM0または安全リセット。", "Field condition is OK. Next: M0 or Safety reset.")
-          : t("现场 NG。到事件区按「清除条件」，或释放急停。", "現場NG。イベント区の「条件解除」、または非常停止解除。", "Field NG. Clear faults in the event lab, or release E-stop."),
-        kind: okField ? "success" : "error",
+        text: t("现场条件已 OK。下一步点 M0 或安全复位。", "現場条件はOK。次はM0または安全リセット。", "Field condition is OK. Next: M0 or Safety reset."),
+        kind: "success",
         until: Date.now() + 3600,
       };
       render();

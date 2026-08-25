@@ -23,6 +23,11 @@ import { MISSIONS, missionPressure, missionSimConfig } from "./game/missions";
 import type { CampaignScreen, DifficultyTier, MissionDef } from "./game/types";
 import { NEGOTIATION_PASS, NEGOTIATION_ROUNDS } from "./game/story";
 import {
+  nextStartStep,
+  renderAssistantCoach,
+  tutorialPulseSelector,
+} from "./game/tutorial";
+import {
   renderBrief,
   renderClient,
   renderHold,
@@ -53,6 +58,7 @@ let holdClockTimer = 0;
 let playRaf = 0;
 let lastPlayTs = 0;
 let lastAlarmCode: number | null = null;
+let lastTutorialKey = "";
 let toast: { text: string; kind: "error" | "success"; until: number } | null = null;
 
 const EQUIPMENT_PHOTOS: Record<string, string> = {
@@ -351,7 +357,23 @@ function patchLive(): void {
 
   const coach = document.getElementById("live-coach");
   if (coach) {
-    coach.hidden = snapshot.running || snapshot.completed;
+    if (campaign.difficulty === 1) {
+      const key = `${locale}:${nextStartStep(snapshot)}`;
+      if (key !== lastTutorialKey) {
+        lastTutorialKey = key;
+        const html = renderAssistantCoach(locale, snapshot).trim();
+        coach.outerHTML = html;
+      }
+    } else {
+      coach.hidden = snapshot.running || snapshot.completed || campaign.difficulty === 3;
+    }
+  }
+  document.querySelectorAll(".tutorial-pulse").forEach((el) => el.classList.remove("tutorial-pulse"));
+  if (campaign.difficulty === 1 && !snapshot.running && !snapshot.completed) {
+    const selector = tutorialPulseSelector(nextStartStep(snapshot));
+    if (selector) {
+      document.querySelectorAll(selector).forEach((el) => el.classList.add("tutorial-pulse"));
+    }
   }
 }
 
@@ -381,6 +403,7 @@ function render(): void {
     ${renderToast()}
   `;
   lastAlarmCode = snapshot.activeAlarm?.code ?? null;
+  lastTutorialKey = campaign.difficulty === 1 ? `${locale}:${nextStartStep(snapshot)}` : "";
 }
 
 function renderCampaign(): string {
@@ -601,13 +624,7 @@ function renderHmi(): string {
         <div><span>STEP</span><b id="live-hud-step">D0 ${String(snapshot.step).padStart(2, "0")}</b></div>
         <div><span>CPU</span><b>${snapshot.cpu.family} ${esc(snapshot.cpu.model)}</b></div>
       </section>
-      <p class="live-coach" id="live-coach" ${snapshot.running || snapshot.completed ? "hidden" : ""}>
-        ${t(
-          "操作链：主电源 → 通信链路里连接 → 安全复位 → AUTO → START。运行中只更新数值，按钮保持可点。",
-          "操作：主電源 → NETで接続 → 安全リセット → AUTO → START。運転中は数値のみ更新し、ボタンは再構築しません。",
-          "Chain: Power → Connect on NET → Safety reset → AUTO → START. While running, only values patch — buttons stay clickable.",
-        )}
-      </p>
+      ${renderLiveCoach()}
       ${renderPageHead(
         "HMI / CONTROL ROOM",
         "运行总览",
@@ -714,7 +731,7 @@ function renderControlPanel(): string {
         ${condition("X0", t("急停回路", "非常停止回路"), snapshot.inputs.eStopHealthy)}
         ${condition("X1", t("安全门", "安全扉"), snapshot.inputs.safetyDoorClosed)}
         ${condition("X2", t("驱动器", "ドライブ"), snapshot.inputs.driveHealthy)}
-        ${condition("M0", t("安全许可", "安全許可"), snapshot.safetyReset)}
+        ${condition("M0", t("安全许可", "安全許可"), snapshot.safetyReset && snapshot.inputs.eStopHealthy && snapshot.inputs.safetyDoorClosed && snapshot.inputs.driveHealthy, true)}
       </div>
       <div class="operator-buttons">
         <button type="button" class="op-btn power ${snapshot.powered ? "active" : ""}" data-action="power"><i></i><span>${t("主电源", "主電源")}</span><b>${snapshot.powered ? "ON" : "OFF"}</b></button>
@@ -733,8 +750,25 @@ function renderControlPanel(): string {
   `;
 }
 
-function condition(tag: string, label: string, pass: boolean): string {
-  return `<div class="condition ${pass ? "pass" : "fail"}" data-cond="${tag}"><i></i><span><b>${tag}</b>${label}</span><em>${pass ? "OK" : "NG"}</em></div>`;
+function condition(tag: string, label: string, pass: boolean, latch = false): string {
+  const hint =
+    campaign.difficulty === 1 && latch && !pass
+      ? `<small class="cond-next">${t("点此复位 M0", "ここを押してM0リセット", "Click to latch M0")}</small>`
+      : "";
+  return `<button type="button" class="condition ${pass ? "pass" : "fail"}" data-cond="${tag}"><i></i><span><b>${tag}</b>${label}${hint}</span><em>${pass ? "OK" : "NG"}</em></button>`;
+}
+
+function renderLiveCoach(): string {
+  if (campaign.difficulty === 1) {
+    if (snapshot.running || snapshot.completed) return "";
+    return renderAssistantCoach(locale, snapshot);
+  }
+  if (campaign.difficulty === 3 || snapshot.running || snapshot.completed) return "";
+  return `<p class="live-coach" id="live-coach">${t(
+    "安全链已锁存。自己判断硬件、复位和启动。通信恢复不会自动启动。",
+    "安全チェーンはラッチ済み。ハード、リセット、起動は自分で判断。通信復帰は自動起動しない。",
+    "The safety chain is latched. Diagnose hardware, reset, and start yourself. A restored link never auto-starts.",
+  )}</p>`;
 }
 
 function renderRecipePanel(): string {
@@ -1234,6 +1268,39 @@ app.addEventListener("click", (event) => {
   if (faultButton) {
     handleResult(plc.injectFault(faultButton.dataset.fault as FaultKind));
     return;
+  }
+
+  const condButton = target.closest<HTMLButtonElement>("[data-cond]");
+  if (condButton && screen === "play") {
+    const tag = condButton.dataset.cond;
+    if (tag === "M0") {
+      handleResult(plc.resetSafety());
+      return;
+    }
+    if (tag === "X0") {
+      if (!snapshot.inputs.eStopHealthy) handleResult(plc.releaseEmergencyStop());
+      else {
+        toast = {
+          text: t("X0 已 OK。M0 仍要按安全复位锁存。", "X0はOK。M0は安全リセットでラッチ。", "X0 is OK. M0 still needs a safety reset latch."),
+          kind: "success",
+          until: Date.now() + 3200,
+        };
+        render();
+      }
+      return;
+    }
+    if (tag === "X1" || tag === "X2") {
+      const okField = tag === "X1" ? snapshot.inputs.safetyDoorClosed : snapshot.inputs.driveHealthy;
+      toast = {
+        text: okField
+          ? t("现场条件已 OK。下一步点 M0 或安全复位。", "現場条件はOK。次はM0または安全リセット。", "Field condition is OK. Next: M0 or Safety reset.")
+          : t("现场 NG。到事件区按「清除条件」，或释放急停。", "現場NG。イベント区の「条件解除」、または非常停止解除。", "Field NG. Clear faults in the event lab, or release E-stop."),
+        kind: okField ? "success" : "error",
+        until: Date.now() + 3600,
+      };
+      render();
+      return;
+    }
   }
 
   const actionButton = target.closest<HTMLButtonElement>("[data-action]");

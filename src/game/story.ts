@@ -13,9 +13,9 @@ export const DIFFICULTY_LABEL: Record<DifficultyTier, I18nText> = {
 
 export const DIFFICULTY_DETAIL: Record<DifficultyTier, I18nText> = {
   1: {
-    zh: "两次分阶段扰动。通过窗口较宽。适合第一次走通上电—通信—复位—启动。",
-    ja: "段階的な工程外乱は2回。合格窓は広め。電源—通信—リセット—起動の習得向け。",
-    en: "Two staged disturbances and a wider pass window. Learn power, link, reset, start.",
+    zh: "逐步教程：主电源 → NET 连接 → 点 M0/安全复位 → AUTO → START。X0/X1/X2 已 OK 时 M0 仍要复位锁存。通过窗口较宽。",
+    ja: "手順教程：主電源 → NET接続 → M0/安全リセット → AUTO → START。X0/X1/X2がOKでもM0はラッチが必要。合格窓は広め。",
+    en: "Walkthrough: power → NET connect → click M0/reset → AUTO → START. M0 stays NG until latched even if X0/X1/X2 are OK. Wider pass window.",
   },
   2: {
     zh: "多重扰动，含安全门或 CC-Link 远程站。配方与复位必须分开做对。",

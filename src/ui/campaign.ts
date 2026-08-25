@@ -311,10 +311,15 @@ export function renderBrief(
           <ol class="start-chain">
             <li><span>01</span><b>${t(locale, "主电源", "主電源", "Main power")}</b><small>24 VDC</small></li>
             <li><span>02</span><b>${t(locale, "连接以太网", "Ethernet接続", "Connect Ethernet")}</b><small>${mission.family === "Q" ? "MC 3E" : "SLMP 3E"}</small></li>
-            <li><span>03</span><b>${t(locale, "安全复位", "安全リセット", "Safety reset")}</b><small>X0 · X1 · X2</small></li>
+            <li><span>03</span><b>${t(locale, "安全复位", "安全リセット", "Safety reset")}</b><small>X0 · X1 · X2 → M0</small></li>
             <li><span>04</span><b>${t(locale, "写入并回读", "書込み・照合", "Write + verify")}</b><small>D100—D104</small></li>
             <li><span>05</span><b>AUTO → START</b><small>M10 · M20</small></li>
           </ol>
+          ${
+            campaign.difficulty === 1
+              ? `<p class="brief-tutorial-note">${t(locale, "助理难度会在 HMI 顶部逐步提示。开局 M0 为 NG 是正常的：先上电、NET 连接，再点 M0 卡片或「安全复位」锁存。专家/传奇不给逐步提示。", "アシスタント難易度はHMI上部で手順を出す。開始時のM0=NGは正常。電源とNET接続の後、M0カードまたは「安全リセット」でラッチ。エキスパート/レジェンドは手順を出さない。", "Assistant mode shows a live start-chain tutorial. M0 starts NG on purpose: power, connect NET, then click the M0 tile or Safety reset. Expert/Legend hide the walkthrough.")}</p>`
+              : `<p class="brief-tutorial-note hard">${t(locale, "当前难度不提供逐步教程。安全链锁存、通信恢复后的再启动都要自己完成。", "この難易度では手順教程なし。安全ラッチと通信復帰後の再起動は自分で行う。", "This difficulty has no step tutorial. Latch the safety chain and restart yourself after a restored link.")}</p>`
+          }
           <div class="brief-difficulty"><div><span>${t(locale, "时间压力", "時間プレッシャー", "Timed pressure")}</span><b>${t(locale, "任务计时开始后，压力将从 L1 升至 L3；更高难度会缩短升级间隔。", "計時開始後、プレッシャーはL1からL3へ上昇。高難易度ほど間隔が短くなります。", "Once the mission clock starts, pressure rises from L1 to L3. Higher modes shorten each escalation interval.")}</b></div>${difficultyPicker(locale, campaign.difficulty)}</div>
           <div class="actions brief-actions">
             <button type="button" class="btn-primary" data-action="run-mission">${t(locale, "进入 HMI", "HMIへ", "Enter HMI")}</button>

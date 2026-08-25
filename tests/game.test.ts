@@ -14,6 +14,7 @@ import {
   pressureThresholds,
 } from "../src/game/missions";
 import { PlcLineSimulator } from "../src/simulator/plc";
+import { chainStatus, nextStartStep } from "../src/game/tutorial";
 
 function blankCampaign(): CampaignState {
   return { failures: {}, holds: {}, badges: {}, cooperations: 0, difficulty: 1 };
@@ -168,5 +169,35 @@ describe("badges", () => {
     );
     expect(earned).toContain("press-commissioner");
     expect(earned).toContain("safety-first");
+  });
+});
+
+describe("assistant start chain", () => {
+  it("starts at power, then connect, then reset while M0 is still false", () => {
+    const plc = new PlcLineSimulator(1);
+    expect(nextStartStep(plc.getSnapshot())).toBe("power");
+    expect(plc.getSnapshot().devices.M.M0).toBe(false);
+
+    expect(plc.togglePower().ok).toBe(true);
+    expect(nextStartStep(plc.getSnapshot())).toBe("connect");
+
+    expect(plc.setConnection(true).ok).toBe(true);
+    const afterLink = plc.getSnapshot();
+    expect(afterLink.inputs.eStopHealthy).toBe(true);
+    expect(afterLink.safetyReset).toBe(false);
+    expect(afterLink.devices.M.M0).toBe(false);
+    expect(nextStartStep(afterLink)).toBe("reset");
+
+    expect(plc.resetSafety().ok).toBe(true);
+    const afterReset = plc.getSnapshot();
+    expect(afterReset.devices.M.M0).toBe(true);
+    expect(nextStartStep(afterReset)).toBe("start");
+  });
+
+  it("marks reset as current while waiting to latch M0", () => {
+    expect(chainStatus("reset", "power")).toBe("done");
+    expect(chainStatus("reset", "connect")).toBe("done");
+    expect(chainStatus("reset", "reset")).toBe("current");
+    expect(chainStatus("reset", "start")).toBe("todo");
   });
 });

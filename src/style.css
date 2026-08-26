@@ -122,6 +122,93 @@ textarea {
   font-size: 14px;
 }
 
+.live-coach.tutorial {
+  display: grid;
+  gap: 10px;
+}
+
+.tutorial-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tutorial-head b {
+  font-size: 15px;
+}
+
+.tutorial-head small {
+  color: #9ad9c4;
+  font-size: 12px;
+}
+
+.tutorial-steps {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  list-style: none;
+}
+
+.tutorial-steps li {
+  min-height: 42px;
+  padding: 8px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f1724;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.tutorial-steps li.done {
+  border-color: #2f6f5c;
+  color: #9ad9c4;
+}
+
+.tutorial-steps li.current {
+  border-color: var(--amber);
+  background: var(--amber-pale);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.tutorial-now {
+  margin: 0;
+  color: #ffd27a;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.tutorial-how {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.tutorial-how li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  align-items: start;
+  color: #d7fff0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.tutorial-how li b {
+  color: var(--amber);
+  font-family: var(--mono);
+}
+
+.tutorial-pulse {
+  outline: 2px solid var(--amber);
+  animation: pulse-attn 1s ease-in-out infinite;
+}
+
 .machine-art img {
   width: 100%;
   height: 88px;
@@ -921,6 +1008,7 @@ textarea {
 }
 
 .condition {
+  width: 100%;
   min-height: 48px;
   padding: 8px 10px;
   display: grid;
@@ -929,6 +1017,9 @@ textarea {
   gap: 8px;
   background: var(--panel);
   border: 1px solid var(--line);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .condition > i {
@@ -965,6 +1056,14 @@ textarea {
 }
 
 .condition.pass em { color: var(--green); }
+
+.cond-next {
+  display: block;
+  margin-top: 3px;
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 700;
+}
 
 .operator-buttons {
   padding: 13px;
@@ -1697,6 +1796,7 @@ textarea {
   .trouble-grid > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
   .trouble-grid > div:nth-child(4) { border-top: 1px solid var(--line); }
   .app-footer { align-items: flex-start; flex-direction: column; }
+  .tutorial-steps { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 430px) {
@@ -2920,6 +3020,23 @@ textarea {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 6px;
+}
+
+.brief-tutorial-note {
+  margin: 12px 14px 0;
+  padding: 12px 14px;
+  border: 1px solid #2f6f5c;
+  border-radius: 8px;
+  background: rgba(20, 147, 111, 0.12);
+  color: #d7fff0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.brief-tutorial-note.hard {
+  border-color: var(--amber);
+  background: var(--amber-pale);
+  color: var(--ink);
 }
 
 .brief-difficulty {

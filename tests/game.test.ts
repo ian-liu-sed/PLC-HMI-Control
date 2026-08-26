@@ -15,6 +15,7 @@ import {
 } from "../src/game/missions";
 import { PlcLineSimulator } from "../src/simulator/plc";
 import { chainStatus, nextGuideStep } from "../src/game/tutorial";
+import { batchVerdict } from "../src/game/verdict";
 
 function blankCampaign(): CampaignState {
   return { failures: {}, holds: {}, badges: {}, cooperations: 0, difficulty: 1 };
@@ -98,6 +99,30 @@ describe("mission scoring", () => {
     expect(plc.abortMission().ok).toBe(true);
     expect(plc.getSnapshot().result?.passed).toBe(false);
     expect(plc.getSnapshot().result?.aborted).toBe(true);
+  });
+
+  it("does not report 100% quality or OEE on an empty abort", () => {
+    const mission = MISSIONS.find((item) => item.id === "M1-press")!;
+    const plc = new PlcLineSimulator(missionSimConfig(mission, 1, 8));
+    expect(plc.abortMission().ok).toBe(true);
+    const result = plc.getSnapshot().result;
+    expect(result?.aborted).toBe(true);
+    expect(result?.passed).toBe(false);
+    expect(result?.total).toBe(0);
+    expect(result?.qualityPct).toBe(0);
+    expect(result?.oeePct).toBe(0);
+  });
+
+  it("explains a completed batch that misses the quality gate", () => {
+    const verdict = batchVerdict(
+      { passed: false, aborted: false, completed: true, qualityPct: 94.2, oeePct: 80 },
+      96,
+      68,
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.qualityOk).toBe(false);
+    expect(verdict.oeeOk).toBe(true);
+    expect(verdict.reasons).toEqual(["quality"]);
   });
 });
 

@@ -530,16 +530,19 @@ export class PlcLineSimulator {
   private sealResult(aborted: boolean): void {
     if (!this.missionId || this.result) return;
     const metrics = this.calculateMetrics();
+    const emptyAbort = aborted && this.total === 0;
+    const qualityPct = emptyAbort ? 0 : metrics.qualityPct;
+    const oeePct = emptyAbort ? 0 : metrics.oeePct;
     const passed =
       !aborted &&
       this.completed &&
-      metrics.qualityPct >= this.passQualityPct &&
-      metrics.oeePct >= this.passOeePct;
+      qualityPct >= this.passQualityPct &&
+      oeePct >= this.passOeePct;
     const score = Math.max(
       0,
       Math.round(
-        metrics.oeePct * 8 +
-          metrics.qualityPct * 4 +
+        oeePct * 8 +
+          qualityPct * 4 +
           this.incidentsHandled * 30 -
           (aborted ? 180 : 0),
       ),
@@ -548,8 +551,8 @@ export class PlcLineSimulator {
       aborted,
       completed: this.completed,
       passed,
-      qualityPct: metrics.qualityPct,
-      oeePct: metrics.oeePct,
+      qualityPct,
+      oeePct,
       total: metrics.total,
       good: metrics.good,
       rejected: metrics.rejected,

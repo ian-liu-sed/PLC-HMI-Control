@@ -540,8 +540,7 @@ function finishMission(): void {
     );
     campaign = unlockBadges(campaign, recentBadgeIds);
   }
-  screen = failureCount(campaign, mission.id) >= HOLD_THRESHOLD && !result.passed ? "hold" : "result";
-  if (screen === "hold") holdActions = new Set();
+  screen = "result";
   render();
 }
 
@@ -1358,6 +1357,12 @@ app.addEventListener("click", (event) => {
     },
     "retry-mission": () => {
       startMission();
+      return { ok: true };
+    },
+    "enter-hold": () => {
+      holdActions = new Set();
+      screen = "hold";
+      render();
       return { ok: true };
     },
     "call-client": () => {

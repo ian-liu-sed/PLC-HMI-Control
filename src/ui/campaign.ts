@@ -9,6 +9,7 @@ import {
 } from "../game/story";
 import { difficultyProfile, MISSIONS } from "../game/missions";
 import { HOLD_THRESHOLD } from "../game/campaign";
+import { batchVerdict, VERDICT_REASON_COPY } from "../game/verdict";
 import type { Locale } from "../simulator/types";
 
 function esc(value: string | number): string {
@@ -339,30 +340,64 @@ export function renderResult(
   campaign: CampaignState,
 ): string {
   const remaining = Math.max(0, HOLD_THRESHOLD - failures);
+  const held = !result.passed && failures >= HOLD_THRESHOLD;
+  const profile = difficultyProfile(mission, campaign.difficulty);
+  const verdict = batchVerdict(result, profile.qualityPct, profile.oeePct);
+  const reasonLines = verdict.reasons
+    .map((reason) => {
+      if (reason === "quality") {
+        return t(
+          locale,
+          `质量 ${result.qualityPct.toFixed(1)}% < ${profile.qualityPct}%`,
+          `品質 ${result.qualityPct.toFixed(1)}% < ${profile.qualityPct}%`,
+          `Quality ${result.qualityPct.toFixed(1)}% < ${profile.qualityPct}%`,
+        );
+      }
+      if (reason === "oee") {
+        return t(
+          locale,
+          `OEE ${result.oeePct.toFixed(1)}% < ${profile.oeePct}%`,
+          `OEE ${result.oeePct.toFixed(1)}% < ${profile.oeePct}%`,
+          `OEE ${result.oeePct.toFixed(1)}% < ${profile.oeePct}%`,
+        );
+      }
+      return tx(VERDICT_REASON_COPY[reason], locale);
+    })
+    .map((line) => `<li>${esc(line)}</li>`)
+    .join("");
   return `
     <div class="campaign-shell">
       <header class="campaign-hero ${result.passed ? "pass" : "fail"}">
         <div>
           <p class="eyebrow">${result.passed ? t(locale, "客户满意", "顧客満足", "Client satisfied") : t(locale, "客户失望", "顧客失望", "Client disappointed")}</p>
-          <h1>${t(locale, "批次报告", "バッチレポート", "Batch report")}</h1>
+          <h1>${result.passed ? t(locale, "批次通过", "バッチ合格", "Batch passed") : t(locale, "批次未通过", "バッチ不合格", "Batch failed")}</h1>
           <p>${esc(tx(mission.title, locale))}</p>
         </div>
         ${localeSwitchHtml(locale)}
       </header>
       <section class="result-kpis">
-        <div><span>OEE</span><b>${result.oeePct.toFixed(1)}%</b></div>
-        <div><span>${t(locale, "质量", "品質", "Quality")}</span><b>${result.qualityPct.toFixed(1)}%</b></div>
-        <div><span>${t(locale, "产量", "生産数", "Produced")}</span><b>${result.good}/${result.total}</b></div>
+        <div class="${verdict.oeeOk ? "gate-ok" : "gate-bad"}"><span>OEE ≥ ${profile.oeePct}%</span><b>${result.oeePct.toFixed(1)}%</b></div>
+        <div class="${verdict.qualityOk ? "gate-ok" : "gate-bad"}"><span>${t(locale, "质量", "品質", "Quality")} ≥ ${profile.qualityPct}%</span><b>${result.qualityPct.toFixed(1)}%</b></div>
+        <div><span>${t(locale, "产量", "生産数", "Produced")}</span><b>${result.total}/${mission.recipe.batchTarget}</b></div>
+        <div><span>${t(locale, "良品 / 剔除", "良品 / 排出", "Good / reject")}</span><b>${result.good}/${result.rejected}</b></div>
         <div><span>${t(locale, "分数", "スコア", "Score")}</span><b>${result.score}</b></div>
       </section>
+      <div class="result-verdict ${result.passed ? "pass" : "fail"}">
+        <strong>${result.passed ? t(locale, "门槛已满足", "基準を満たした", "Gates met") : t(locale, "未通过原因", "不合格の理由", "Why it failed")}</strong>
+        ${
+          result.passed
+            ? `<p>${t(locale, `质量 ${result.qualityPct.toFixed(1)}% ≥ ${profile.qualityPct}%，OEE ${result.oeePct.toFixed(1)}% ≥ ${profile.oeePct}%。`, `品質 ${result.qualityPct.toFixed(1)}% ≥ ${profile.qualityPct}%，OEE ${result.oeePct.toFixed(1)}% ≥ ${profile.oeePct}%。`, `Quality ${result.qualityPct.toFixed(1)}% ≥ ${profile.qualityPct}%, OEE ${result.oeePct.toFixed(1)}% ≥ ${profile.oeePct}%.`)}</p>`
+            : `<ul>${reasonLines || `<li>${esc(t(locale, "未达到通过条件。", "合格条件未達。", "Pass conditions were not met."))}</li>`}</ul>`
+        }
+      </div>
       ${
         result.passed
           ? ""
-          : `<div class="failure-reminder ${remaining === 0 ? "hold" : ""}">
+          : `<div class="failure-reminder ${held ? "hold" : ""}">
               <strong>${t(locale, "连续失败", "連続失敗", "Fail streak")} ${failures}/${HOLD_THRESHOLD}</strong>
               <p>${
-                remaining === 0
-                  ? t(locale, "线体锁定一小时，并进入 CAPA。", "1時間のラインロックとCAPAに入ります。", "The line is held for one hour. Complete CAPA.")
+                held
+                  ? t(locale, "已连续失败 3 次。看完报告后进入一小时锁定和 CAPA。", "3回連続失敗。レポートの後、1時間ロックとCAPAへ。", "Three consecutive failures. After this report, the line holds for one hour and CAPA.")
                   : t(locale, `再失败 ${remaining} 次将锁定该线。`, `あと${remaining}回失敗するとロックされます。`, `${remaining} more failure(s) will hold this line.`)
               }</p>
             </div>`
@@ -373,7 +408,11 @@ export function renderResult(
           : ""
       }
       <div class="actions">
-        <button type="button" class="btn-primary" data-action="retry-mission">${t(locale, "再跑一批", "再バッチ", "Retry batch")}</button>
+        ${
+          held
+            ? `<button type="button" class="btn-primary" data-action="enter-hold">${t(locale, "进入锁定 / CAPA", "ロック / CAPAへ", "Enter hold / CAPA")}</button>`
+            : `<button type="button" class="btn-primary" data-action="retry-mission">${t(locale, "再跑一批", "再バッチ", "Retry batch")}</button>`
+        }
         <button type="button" class="btn-ghost" data-nav="hub">${t(locale, "返回任务", "ミッションへ戻る", "All missions")}</button>
       </div>
     </div>`;

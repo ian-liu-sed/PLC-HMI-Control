@@ -2165,9 +2165,27 @@ textarea {
 }
 
 .result-kpis {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   margin: 18px 0;
 }
+
+.result-kpis .gate-ok b { color: var(--green); }
+.result-kpis .gate-bad b { color: var(--red); }
+
+.result-verdict {
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.result-verdict.pass { border-color: var(--green); background: var(--green-pale); }
+.result-verdict.fail { border-color: var(--red); background: var(--red-pale); }
+
+.result-verdict strong { display: block; margin-bottom: 6px; font-size: 16px; }
+.result-verdict p,
+.result-verdict ul { margin: 0; font-size: 14px; line-height: 1.5; }
+.result-verdict ul { padding-left: 1.2em; }
 
 .result-kpis > div,
 .hold-clock,
